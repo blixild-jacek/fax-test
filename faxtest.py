@@ -17,6 +17,7 @@ elsewhere (--sandbox); see README.md.
 """
 import argparse
 import concurrent.futures
+import ctypes
 import datetime
 import glob
 import json
@@ -51,27 +52,16 @@ CCITT = ('ccitt_rle', 'g3_1d', 'g3_2d', 'g4')
 FORBIDDEN = re.compile(r'\b(subprocess|ctypes|cffi|os\.system|os\.popen|os\.exec\w*|os\.spawn\w*|PIL|numpy|'
                        r'tifffile|imageio|cv2|libtiff)\b')
 
-OUT_LIMIT = 64 << 20          # bytes a module may write to any file, its output included
-MEM_LIMIT = 1536 << 20        # resident memory before the module is stopped
+OUT_LIMIT = 64 << 20          # bytes a module may write to any one file, its output included
+DISK_LIMIT = 256 << 20        # bytes it may write in all
+MEM_LIMIT = 1536 << 20        # memory it may use (measured by the grader, from outside the sandbox)
 SAFE_ENV = {'PATH': '/usr/bin:/bin'}   # all a sandboxed module gets of your environment: no keys, no home
 
 RUNNER = r'''
-import json, os, resource, sys, threading, time
-FSIZE, MEM, CPU = int(sys.argv[3]), int(sys.argv[4]), int(sys.argv[5])
+import json, resource, sys, time
+FSIZE, CPU = int(sys.argv[3]), int(sys.argv[4])
 resource.setrlimit(resource.RLIMIT_FSIZE, (FSIZE, FSIZE))
 resource.setrlimit(resource.RLIMIT_CPU, (CPU, CPU))
-SCALE = 1 if sys.platform == 'darwin' else 1024          # ru_maxrss: bytes on macOS, kilobytes on Linux
-
-
-def watch():
-    while True:
-        if resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * SCALE > MEM:
-            os.write(2, b'MemoryError: the module used more than the memory limit\n')
-            os._exit(137)
-        time.sleep(0.05)
-
-
-threading.Thread(target=watch, daemon=True).start()
 sys.path.insert(0, '.')
 t0 = time.perf_counter()
 import submission
@@ -109,28 +99,57 @@ def pick_sandbox(choice='auto'):
                      'To run the model\'s code unconfined on your machine, pass --sandbox none (not recommended).')
 
 
-def sb_path(p):
-    """A path as a quoted string in a sandbox profile."""
-    return '"' + os.path.realpath(p).replace('\\', '\\\\').replace('"', '\\"') + '"'
+def sb_quote(p, resolve=True):
+    """A path as a quoted string in a sandbox profile: resolved to its real path, or as given (a link the kernel has
+    to follow, such as the python3 you ran)."""
+    p = os.path.realpath(p) if resolve else os.path.abspath(p)
+    return '"' + p.replace('\\', '\\\\').replace('"', '\\"') + '"'
+
+
+def sandbox_python():
+    """The interpreter the sandbox starts, by its real path (no link to follow): a framework build's real binary
+    (its bin/python3 is a launcher that starts this one), else this Python."""
+    app = os.path.join(sys.base_prefix, 'Resources', 'Python.app', 'Contents', 'MacOS', 'Python')
+    return os.path.realpath(app if sys.platform == 'darwin' and os.path.exists(app) else sys.executable)
 
 
 def macos_profile(tmp, allow_site=False):
-    """sandbox-exec rules, everything denied unless allowed: start this Python, read the system's libraries, Python's
-    standard library and its own folder, write only there. No network, no other program, no child process, no
-    system services, nothing of your files; third-party packages hidden unless allow_site (the selftest's oracle)."""
-    exe = sys.executable
-    py = sorted({os.path.realpath(p) for p in (sys.prefix, sys.base_prefix, os.path.dirname(os.path.realpath(exe)))})
-    site = sorted({os.path.realpath(sysconfig.get_paths()[k]) for k in ('purelib', 'platlib')})
-    hide = '' if allow_site else '(deny file-read* ' + ' '.join(f'(subpath {sb_path(p)})' for p in site) + ')'
+    """sandbox-exec rules, everything denied unless allowed: start the interpreter; read the system's libraries,
+    Python's standard library and native libraries and the module's own folder; see file details only along those
+    paths; write only to that folder. No network, no other program or child process, no system services or system
+    information, nothing of your files; third-party packages hidden unless allow_site (the selftest's oracle). The
+    families of operations at the end are denied by name as well: sandbox-exec leaves reading another process's
+    arguments and environment (process-info) open under "deny default" (seen on macOS 26, November 2026)."""
+    exe = sandbox_python()
+    paths = sysconfig.get_paths()
+    reads = ['/System', '/usr/lib', '/private/var/db/dyld', tmp] + [paths[k] for k in ('stdlib', 'platstdlib')]
+    lib = os.path.join(sys.base_prefix, 'lib')
+    if os.path.isdir(lib):                       # the native libraries Python's own modules link to
+        reads.append(lib)
+    framework = os.path.join(sys.base_prefix, 'Python')
+    files = ['/', '/dev/urandom', '/dev/null', exe] + ([framework] if os.path.exists(framework) else [])
+    site = sorted({os.path.realpath(paths[k]) for k in ('purelib', 'platlib')})
+    if allow_site:
+        reads += site
+    above = set()                                # the folders that lead to what may be read
+    for p in reads + files:
+        p = os.path.realpath(p)
+        while os.path.dirname(p) != p:
+            p = os.path.dirname(p)
+            above.add(p)
+    subpaths = ' '.join(f'(subpath {sb_quote(r)})' for r in reads)
+    literals = ' '.join(f'(literal {sb_quote(f, False)}) (literal {sb_quote(f)})' for f in files)
+    hide = '' if allow_site else '(deny file-read* ' + ' '.join(f'(subpath {sb_quote(p)})' for p in site) + ')'
     return f"""(version 1)
 (deny default)
-(allow process-exec (literal {sb_path(exe)}) (literal {sb_path(os.path.realpath(exe))}))
-(allow file-read-metadata)
-(allow file-read* (literal "/") (subpath "/System") (subpath "/usr/lib") (subpath "/private/var/db/dyld")
-  (literal "/dev/urandom") (literal "/dev/null") (subpath {sb_path(tmp)}) {' '.join(f'(subpath {sb_path(p)})' for p in py)})
+(allow process-exec (literal {sb_quote(exe, False)}) (literal {sb_quote(exe)}))
+(allow file-read-metadata {' '.join(f'(literal {sb_quote(a)})' for a in sorted(above))} {subpaths} {literals})
+(allow file-read* {subpaths} {literals})
 {hide}
-(allow file-write* (subpath {sb_path(tmp)}) (literal "/dev/null"))
-(allow sysctl-read)
+(allow file-write* (subpath {sb_quote(tmp)}) (literal "/dev/null"))
+(deny process-info*) (deny sysctl*) (deny iokit*) (deny ipc*) (deny mach*) (deny network*) (deny nvram*)
+(deny user-preference*) (deny signal (target others)) (deny system-socket) (deny file-ioctl) (deny pseudo-tty)
+(deny dynamic-code-generation)
 """
 
 
@@ -141,16 +160,76 @@ def ensure_image():
 
 
 def stop_containers():
+    """Every container this run started (an interrupted run)."""
     ids = subprocess.run(['docker', 'ps', '-q', '--filter', f'label=faxtest-run={RUN_ID}'],
                          capture_output=True, text=True).stdout.split()
     if ids:
         subprocess.run(['docker', 'kill', *ids], capture_output=True)
 
 
-def read_output(path):
-    """out.bin as written by the runner: a regular file, not a link, at most OUT_LIMIT bytes."""
+class _RusageInfoV2(ctypes.Structure):
+    _fields_ = [('uuid', ctypes.c_uint8 * 16)] + [(n, ctypes.c_uint64) for n in (
+        'user_time', 'system_time', 'pkg_idle_wkups', 'interrupt_wkups', 'pageins', 'wired_size', 'resident_size',
+        'phys_footprint', 'proc_start_abstime', 'proc_exit_abstime', 'child_user_time', 'child_system_time',
+        'child_pkg_idle_wkups', 'child_interrupt_wkups', 'child_pageins', 'child_elapsed_abstime',
+        'diskio_bytesread', 'diskio_byteswritten')]
+
+
+_LIBPROC = None
+
+
+def usage(pid):
+    """(memory in bytes, bytes written to disk) of a process, measured from outside it; None where unknown.
+    macOS: its memory footprint (compressed memory included) and disk writes; Linux: its resident memory."""
+    global _LIBPROC
+    if sys.platform == 'darwin':
+        try:
+            _LIBPROC = _LIBPROC or ctypes.CDLL('/usr/lib/libproc.dylib')
+            info = _RusageInfoV2()
+            if _LIBPROC.proc_pid_rusage(pid, 2, ctypes.byref(info)) == 0:
+                return info.phys_footprint, info.diskio_byteswritten
+        except OSError:
+            pass
+        return None, None
     try:
-        fd = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))
+        with open(f'/proc/{pid}/statm') as f:
+            return int(f.read().split()[1]) * os.sysconf('SC_PAGE_SIZE'), None
+    except (OSError, ValueError, IndexError):
+        return None, None
+
+
+def folder_bytes(path):
+    total = 0
+    for root, dirs, files in os.walk(path):
+        for name in files:
+            try:
+                total += os.lstat(os.path.join(root, name)).st_size
+            except OSError:
+                pass
+    return total
+
+
+def force_rmtree(path):
+    """Removes a work folder whatever the module did to it (read-only folders, locked files)."""
+    for root, dirs, files in os.walk(path):
+        for name in dirs + files:
+            full = os.path.join(root, name)
+            try:
+                if hasattr(os, 'lchflags'):
+                    os.lchflags(full, 0)
+                if not os.path.islink(full):
+                    os.chmod(full, 0o700)
+            except OSError:
+                pass
+    shutil.rmtree(path, ignore_errors=True)
+    if os.path.exists(path):
+        print(f'note: could not remove {path}', file=sys.stderr)
+
+
+def read_output(path):
+    """out.bin as written by the runner: a regular file, not a link or a pipe, at most OUT_LIMIT bytes."""
+    try:
+        fd = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0))
     except FileNotFoundError:
         raise RuntimeError('no output: the module ended before decode() returned')
     except OSError as e:
@@ -171,12 +250,13 @@ def read_output(path):
     return head, px
 
 
-def last_error(path):
-    """The last line the module wrote to stderr, at most 300 characters, read from the end of the file."""
+def last_error(err):
+    """The last line the module wrote to stderr, at most 300 characters, read through the grader's own handle on
+    the file (so a link or pipe the module put in its place is never read)."""
     try:
-        with open(path, 'rb') as f:
-            f.seek(max(0, os.fstat(f.fileno()).st_size - 4096))
-            tail = f.read().decode('utf-8', 'replace')
+        size = os.fstat(err.fileno()).st_size
+        err.seek(max(0, size - 4096))
+        tail = err.read(4096).decode('utf-8', 'replace')
     except OSError:
         return ''
     lines = [ln for ln in tail.strip().splitlines() if ln.strip() and 'MallocStackLogging' not in ln]
@@ -184,46 +264,67 @@ def last_error(path):
 
 
 def run_one(code_path, tif_path, timeout=60, sandbox='sandbox-exec', site=False, env=None):
-    """The module on one file, in a fresh process: (header dict, pixel bytes), or RuntimeError(reason)."""
+    """The module on one file, in a fresh process watched from outside (time, memory, disk): (header dict, pixel
+    bytes), or RuntimeError(reason)."""
     if sandbox == 'docker':
         os.makedirs(WORK, exist_ok=True)
     tmp = tempfile.mkdtemp(prefix='faxtest-', dir=WORK if sandbox == 'docker' else None)
+    name = None
     try:
         shutil.copy(code_path, os.path.join(tmp, 'submission.py'))
         shutil.copy(tif_path, os.path.join(tmp, 'in.tif'))
         with open(os.path.join(tmp, 'runner.py'), 'w', encoding='utf-8') as f:
             f.write(RUNNER)
-        limits = [str(OUT_LIMIT), str(MEM_LIMIT), str(timeout)]
-        py_args = ['-I', '-B', '-X', 'utf8'] + ([] if site else ['-S']) + ['runner.py', 'in.tif', 'out.bin'] + limits
+        py_args = ['-I', '-B', '-X', 'utf8'] + ([] if site else ['-S']) + \
+            ['runner.py', 'in.tif', 'out.bin', str(OUT_LIMIT), str(timeout)]
         if sandbox == 'docker':
+            name = f'faxtest-{RUN_ID}-{uuid.uuid4().hex[:8]}'
             user = ['--user', f'{os.getuid()}:{os.getgid()}'] if hasattr(os, 'getuid') else []
             envs = [a for k, v in (env or {}).items() for a in ('-e', f'{k}={v}')]
-            cmd = ['docker', 'run', '--rm', '--label', f'faxtest-run={RUN_ID}', '--network', 'none',
+            cmd = ['docker', 'run', '--rm', '--name', name, '--label', f'faxtest-run={RUN_ID}', '--network', 'none',
                    '--memory', '1g', '--memory-swap', '1g', '--cpus', '1', '--pids-limit', '64', '--read-only',
                    '--tmpfs', '/tmp:size=64m', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges', *user,
                    *envs, '-v', f'{tmp}:/w', '-w', '/w', DOCKER_IMAGE,
                    'timeout', '-s', 'KILL', str(timeout), 'python', *py_args]
             child_env, wait = os.environ, timeout + 30           # the Docker client's own settings; the start
         else:
-            cmd = [sys.executable, *py_args]
+            cmd = [sandbox_python() if sandbox == 'sandbox-exec' else sys.executable, *py_args]
             if sandbox == 'sandbox-exec':
                 cmd = ['sandbox-exec', '-p', macos_profile(tmp, allow_site=site)] + cmd
             child_env, wait = {**SAFE_ENV, **(env or {})}, timeout + 5
-        with open(os.path.join(tmp, 'stderr.txt'), 'wb') as err:
-            try:
-                p = subprocess.run(cmd, cwd=tmp, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=err,
-                                   timeout=wait, env=child_env)
-            except subprocess.TimeoutExpired:
-                if sandbox == 'docker':
-                    stop_containers()
-                raise RuntimeError(f'timeout after {timeout} s')
-        if p.returncode != 0:
-            if p.returncode in (-9, -24, 137, 152) and not last_error(os.path.join(tmp, 'stderr.txt')):
-                raise RuntimeError(f'timeout after {timeout} s')   # killed, or out of CPU time
-            raise RuntimeError(last_error(os.path.join(tmp, 'stderr.txt')) or f'exit {p.returncode}')
+        with open(os.path.join(tmp, 'stderr.txt'), 'w+b') as err:
+            p = subprocess.Popen(cmd, cwd=tmp, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=err,
+                                 env=child_env)
+            t_end, checked, why = time.time() + wait, 0.0, None
+            while p.poll() is None:
+                now = time.time()
+                if now > t_end:
+                    why = f'timeout after {timeout} s'
+                elif sandbox != 'docker':          # Docker limits memory itself; disk is watched for both
+                    mem, written = usage(p.pid)
+                    if mem and mem > MEM_LIMIT:
+                        why = f'stopped: more than {MEM_LIMIT >> 20} MB of memory'
+                    elif written and written > DISK_LIMIT:
+                        why = f'stopped: more than {DISK_LIMIT >> 20} MB written'
+                if not why and (sandbox == 'docker' or sys.platform != 'darwin') and now - checked > 0.5:
+                    checked = now
+                    if folder_bytes(tmp) > DISK_LIMIT:
+                        why = f'stopped: more than {DISK_LIMIT >> 20} MB written'
+                if why:
+                    p.kill()
+                    if name:
+                        subprocess.run(['docker', 'kill', name], capture_output=True)
+                    p.wait()
+                    raise RuntimeError(why)
+                time.sleep(0.05)
+            if p.returncode != 0:
+                msg = last_error(err)
+                if p.returncode in (-9, -24, 137, 152) and not msg:
+                    raise RuntimeError(f'timeout after {timeout} s')   # killed, or out of CPU time
+                raise RuntimeError(msg or f'exit {p.returncode}')
         return read_output(os.path.join(tmp, 'out.bin'))
     finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+        force_rmtree(tmp)
 
 
 # ---- grading ----
@@ -347,26 +448,39 @@ def chat(base, key, body, timeout=900, progress=print):
 
 def extract_code(text):
     """The module from an answer: the longest fenced code block that defines decode(), Python-tagged or untagged
-    ones first; fences may be indented, tagged in any case, ``` or ~~~; an unclosed last block (an answer cut off by
-    the token limit) counts up to the end. An answer that is only code counts whole. None when there is none."""
+    ones first. Fences may be indented, tagged in any case, ``` or ~~~, closed by a fence with other text after it
+    (```</think>), or wrap further fences (````markdown); a line with inline code (```decode()```) opens nothing; an
+    unclosed last block (an answer cut off by the token limit) counts up to the end. An answer that is only code
+    counts whole. None when there is none."""
     lines = text.replace('\r\n', '\n').replace('\r', '\n').split('\n')
     blocks, cur, lang, fence = [], None, '', ''
     for ln in lines:
         st = ln.strip()
         if cur is None:
-            m = re.match(r'(`{3,}|~{3,})\s*([\w+.-]*)', st)
-            if m:
-                fence, lang, cur = m.group(1), m.group(2).lower(), []
-        elif re.fullmatch(re.escape(fence[0]) + '{%d,}' % len(fence), st):
+            m = re.match(r'(`{3,}|~{3,})(.*)$', st)
+            if m and not (m.group(1)[0] == '`' and '`' in m.group(2)):
+                fence, cur = m.group(1), []
+                lang = re.match(r'\s*([\w+.-]*)', m.group(2)).group(1).lower()
+            continue
+        m = re.match(re.escape(fence[0]) + '{%d,}(.*)$' % len(fence), st)
+        if m and not re.match(r'\s*\w', m.group(1)):
             blocks.append((lang, '\n'.join(cur)))
             cur = None
         else:
             cur.append(ln)
     if cur is not None:
         blocks.append((lang, '\n'.join(cur)))
+    found = []
+    for t, b in blocks:
+        if re.search(r'^\s*(`{3,}|~{3,})', b, re.M):        # a wrapper: the code is in the fences inside it
+            inner = extract_code(b)
+            if inner:
+                found.append(('python', inner))
+                continue
+        found.append((t, b))
     defines = lambda b: re.search(r'^\s*def decode\s*\(', b, re.M)  # noqa: E731
-    good = [b for t, b in blocks if t in ('', 'python', 'py', 'python3') and defines(b)] or \
-        [b for t, b in blocks if defines(b)]
+    good = [b for t, b in found if t in ('', 'python', 'py', 'python3') and defines(b)] or \
+        [b for t, b in found if defines(b)]
     if not good and not blocks and re.search(r'^def decode\s*\(', text, re.M):
         good = [text]
     return textwrap.dedent(max(good, key=len)) if good else None
@@ -494,7 +608,8 @@ def decode(data):
 STRIPS_ONLY = {'raw_gray8', 'raw_rgb8', 'raw_rgb8_strips_be', 'deflate_gray8', 'deflate_rgb8_predictor',
                'deflate_old_code_rgb8'}   # what check/strips_only.py handles: 8-bit gray/RGB strips, none/Deflate
 PROBE_BITS = ('read this folder', 'connect', 'child process', 'write outside its folder', 'start a program',
-              'read /etc/hosts', 'import an installed package')
+              'read /etc/hosts', 'import an installed package', "read the grader's environment",
+              'see file details in this folder')
 # what a module may do inside each sandbox: inside a throwaway container, processes and the container's own /etc
 # reach nothing of yours (bits 4, 16, 32); under sandbox-exec, nothing
 PROBE_ALLOWED = {'sandbox-exec': 0, 'docker': 4 | 16 | 32}
@@ -566,7 +681,7 @@ def selftest(sandbox, jobs=4):
                                                   'FAXTEST_SITE': site_dir, 'FAXTEST_PACKAGE': package})
         finally:
             listener.close()
-        flags, allowed = px[0], PROBE_ALLOWED[sandbox]
+        flags, allowed = px[0] | (px[1] << 8 if len(px) > 1 else 0), PROBE_ALLOWED[sandbox]
         good = flags & ~allowed == 0
         ok &= good
         done = ', '.join(f"{w} {'yes' if flags & (1 << i) else 'no'}" for i, w in enumerate(PROBE_BITS))

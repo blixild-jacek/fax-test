@@ -4,7 +4,8 @@
 as the bits of its one pixel: 1 read a file in the clone ($FAXTEST_PROBE), 2 connect to a listener the selftest
 opened on this machine ($FAXTEST_PORT), 4 start a child process, 8 write a file beside $FAXTEST_PROBE, 16 start
 another program, 32 read a system file (/etc/hosts), 64 import an installed third-party package ($FAXTEST_SITE,
-$FAXTEST_PACKAGE). The selftest says which bits the sandbox may leave set."""
+$FAXTEST_PACKAGE), 128 read the grader's arguments and environment through sysctl (macOS), 256 see the details of a
+file in the clone ($FAXTEST_PROBE). The selftest says which bits the sandbox may leave set."""
 import importlib
 import os
 import socket
@@ -62,4 +63,24 @@ def decode(data):
             flags |= 64
         except Exception:
             pass
-    return 1, 1, 1, bytes([flags])
+    try:
+        try:
+            os.uname()
+        except OSError:                                         # blocked: ctypes needs it, so a module can fake it
+            os.uname = lambda: os.uname_result(('Darwin', '', '23.0', '', ''))
+        import ctypes
+        libc = ctypes.CDLL(None)
+        mib = (ctypes.c_int * 3)(1, 49, os.getppid())          # CTL_KERN, KERN_PROCARGS2, the grader
+        size = ctypes.c_size_t(1 << 16)
+        buf = ctypes.create_string_buffer(1 << 16)
+        if libc.sysctl(mib, 3, buf, ctypes.byref(size), None, 0) == 0 and size.value > 0:
+            flags |= 128
+    except Exception:
+        pass
+    if target:
+        try:
+            os.stat(target)
+            flags |= 256
+        except OSError:
+            pass
+    return 1, 1, 1, bytes([flags & 255, flags >> 8])

@@ -10,8 +10,9 @@ the CCITT Group 3 and Group 4 code tables.
 
 ## Run it
 
-With a model served locally by [Ollama](https://ollama.com), started with room for a long answer (Ollama's default
-context window is 4,096 tokens, too small for the prompt and a decoder):
+With a model served locally by [Ollama](https://ollama.com), started with room for a long answer (Ollama's
+[documentation](https://docs.ollama.com/faq) gives 4,096 tokens as its default context window, too small for the
+prompt and a decoder):
 
 ```bash
 OLLAMA_CONTEXT_LENGTH=65536 ollama serve
@@ -74,6 +75,15 @@ python3 faxtest.py grade my_decoder.py
 
 `python3 faxtest.py table` lists your saved runs.
 
+To see what a decoder returned, file by file beside the original (needs Pillow):
+
+```bash
+python3 tools/gallery.py results/RUN.json [another.json ...]
+```
+
+It writes `results/gallery.png`: one row per test file, the original first, then each run's best module, every tile
+marked exact, the share of pixels right, a short output or the error.
+
 ## What the test asks and checks
 
 The request is [prompt.md](prompt.md), sent as the only message: one Python module, standard library only, with
@@ -101,8 +111,8 @@ and each was read back with libtiff and matched the drawing before it went in.
 [tools/make_corpus.py](tools/make_corpus.py) builds them again, byte for byte with Pillow 12.3 (libtiff 4.7.1) and
 tiffcp 4.7.2; it needs Pillow, numpy and tiffcp, and the test itself does not.
 
-The module runs once per file, in a new process, with limits of 60 seconds, 1.5 GB of memory and 64 MB per written
-file. A file counts only if every sample matches; the results file keeps, for each other file, the error, the wrong
+The module runs once per file, in a new process, with limits of 60 seconds, 1.5 GB of memory (measured by the
+grader from outside the sandbox) and 256 MB written in all, 64 MB per file. A file counts only if every sample matches; the results file keeps, for each other file, the error, the wrong
 size, or the share of pixels that were right.
 
 ## The sandbox
@@ -110,22 +120,25 @@ size, or the share of pixels that were right.
 The code a model writes runs on your machine, so the grader confines it:
 
 - **macOS:** `sandbox-exec`, which ships with the system, with a profile that denies everything it does not allow.
-  The module may start only this Python, read only the system's libraries, Python's standard library and its own
-  temporary folder, and write only to that folder: no network, no other program or child process, no system
-  services, none of your files and no installed third-party package. It gets only a `PATH`, nothing else of your
-  environment. The code runs on your Python, while the prompt asks for 3.12; with an older Python the run says so.
+  The module may start only the Python interpreter, read only the system's libraries, Python's standard library and
+  its native libraries and its own temporary folder, see file details only along those paths, and write only to
+  that folder: no network, no other program or child process, no system services or system information, no other
+  process's details, none of your files and no installed third-party package. It gets only a `PATH`, nothing else of
+  your environment. The code runs on your Python, while the prompt asks for 3.12; with an older Python the run says
+  so. Checked with conda's Python 3.13 and Homebrew's Python 3.15 on macOS 26.
 - **Linux and Windows:** Docker: each file in a new `python:3.12-alpine` container with no network, a read-only file
   system, 1 GB of memory and no swap, one CPU, at most 64 processes, every capability dropped and a time limit
-  inside the container. None of your files is visible in it except the module's own folder. The image is pulled
-  once; an interrupted run stops its containers.
+  inside the container. None of your files is visible in it except the module's own folder, and the grader never
+  follows a link or opens a pipe the module leaves there. The image is pulled once; an interrupted run stops its
+  containers.
 - **`--sandbox none`** runs the code unconfined, with your rights. Use it only for code you have read.
 
 `python3 faxtest.py selftest` checks the grader on decoders whose scores are known before they run (libtiff through
 Pillow, if Pillow is installed for this Python, must pass all 40; the same with one sample changed must pass none; a
 blank answer none; a 40-line partial decoder exactly its 6 files). Then a module tries, from inside the sandbox, to
-read a file in this folder, connect to a listener the selftest opens on your machine, start a child process or
-another program, write outside its folder, read `/etc/hosts` and import an installed package; under macOS every
-attempt must fail. Inside a Docker container, processes and the container's own `/etc/hosts` are allowed, since
+read a file in this folder or see its details, connect to a listener the selftest opens on your machine, start a
+child process or another program, write outside its folder, read `/etc/hosts`, import an installed package and read
+the grader's own environment; under macOS every attempt must fail. Inside a Docker container, processes and the container's own `/etc/hosts` are allowed, since
 they reach nothing of yours, and your files are not there to read.
 
 ## Our results
