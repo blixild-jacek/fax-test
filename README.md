@@ -33,11 +33,11 @@ Any server that speaks the OpenAI chat API works. Point `--base-url` at it and n
 `OPENAI_BASE_URL` in the environment can stand in for `--base-url`. The key, if the server needs one, is read from
 `OPENAI_API_KEY` (or the variable `--api-key-env` names) and never written to the results.
 
-A run prints each file's result and ends with a line like this one (from Qwen3.8-27B with reasoning off, one of our
-runs below):
+A run prints each file's result and ends with a line like this one (Qwen3.8-27B with reasoning off and `--turns 1`,
+from a fresh clone, 25 November 2026):
 
 ```
-The Fax Test, qwen3.8-27b: 8/40 files at best, CCITT 0/19; files by turn [1, 8, 8, 8]; saved results/....json
+The Fax Test, qwen3.8-27b: 9/40 files at best, CCITT 0/19; files by turn [7, 9]; saved results/qwen3.8-27b-20261125-152628.json
 ```
 
 ### Options worth knowing
@@ -99,8 +99,8 @@ The code a model writes runs on your machine, so the grader confines it:
   temporary folder, no reading your home folder or this folder; and `python -I -S`, so no third-party package can be
   imported.
 - **Linux and Windows:** Docker: each file in a new `python:3.12-alpine` container with no network, a read-only file
-  system, 1 GB of memory, one CPU, at most 64 processes and every capability dropped. The image is pulled once,
-  about 20 MB.
+  system, 1 GB of memory, one CPU, at most 64 processes and every capability dropped. The image is pulled
+  once.
 - **`--sandbox none`** runs the code unconfined, with your rights. Use it only for code you have read.
 
 `python3 faxtest.py selftest` checks the grader on decoders whose scores are known before they run (libtiff through
@@ -116,15 +116,15 @@ sampling its model card recommends. One or two runs per setting, so these show h
 | Model, setting | Requests (all turns) | Answers with code | Best answer, files right | CCITT files right |
 | --- | --- | --- | --- | --- |
 | Qwen3.8-27B, reasoning (60,000 and 261,000 tokens) | 6 | 4 | 12 of 40 | 0 of 19 |
-| Qwen3.8-27B, reasoning off | 5 | 5 | 8 of 40 | 0 of 19 |
+| Qwen3.8-27B, reasoning off | 7 | 7 | 9 of 40 | 0 of 19 |
 | Arete-27B (60,000 tokens) | 4 | 1 | 0 of 40 | 0 of 19 |
 | Inkling 2 Mini (60,000 tokens) | 5 | 2 | 0 of 40 | 0 of 19 |
 | Ternary Bonsai 2.5 27B (60,000 tokens) | 4 | 0 | 0 of 40 | 0 of 19 |
 
 No answer decoded a single CCITT file. Qwen3.8-27B's best module read 12 files, all uncompressed, PackBits or
-Deflate. At 60,000 tokens most answers from the reasoning models ended while still reasoning, with no code; told
-what had failed, Qwen3.8-27B with reasoning off went from 1 file to 8 in one turn and stayed there, and with
-reasoning its module got worse each turn (6, 5, 1).
+Deflate. At 60,000 tokens most answers from the reasoning models ended while still reasoning, with no code. Told
+what had failed, Qwen3.8-27B with reasoning off went from 1 file to 8 in one turn and stayed there in one run, and from
+7 to 9 in another; with reasoning, its module got worse each turn (6, 5, 1).
 
 ## What it does not test
 
