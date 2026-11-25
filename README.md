@@ -144,14 +144,14 @@ they reach nothing of yours, and your files are not there to read.
 ## Our results
 
 Measured on 25 November 2026 through our own API, the models running on our graphics cards, each at the sampling
-its model card recommends (Arete-27B at the server's default). One to four runs per setting, so these show how the
+its model card recommends (Arete-27B at the server's default). One to five runs per setting, so these show how the
 models behave, not a score. Most ran on this test before it was packaged here, with the same prompt, files and
-grading; the last two reasoning-off runs ran from this repository.
+grading; the last three reasoning-off runs ran from this repository.
 
 | Model, setting | Requests (all turns) | Answers with code | Best answer, files right | CCITT files right |
 | --- | --- | --- | --- | --- |
 | Qwen3.8-27B, reasoning (60,000 and 261,000 tokens) | 6 | 4 | 12 of 40 | 0 of 19 |
-| Qwen3.8-27B, reasoning off | 8 | 8 | 9 of 40 | 0 of 19 |
+| Qwen3.8-27B, reasoning off | 9 | 9 | 9 of 40 | 0 of 19 |
 | Arete-27B (60,000 tokens) | 4 | 1 | 0 of 40 | 0 of 19 |
 | Inkling 2 Mini (60,000 tokens) | 5 | 2 | 0 of 40 | 0 of 19 |
 | Ternary Bonsai 2.5 27B (60,000 tokens) | 4 | 0 | 0 of 40 | 0 of 19 |
