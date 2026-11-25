@@ -101,7 +101,8 @@ To see what a decoder returned, file by file beside the original (needs Pillow):
 python3 tools/gallery.py results/RUN.json [another.json ...]
 ```
 
-It writes `results/gallery.png`: one row per chosen test file (10 by default, `--files` picks them), the original first, then each run's best module, every tile
+It writes `results/gallery.png`: one row per chosen test file (10 by default, `--files` picks them; `--tiff FILE`
+draws your own TIFF files instead), the original first, then each run's best module, every tile
 marked exact, the share of pixels right, a short output or the error.
 
 ## What the test asks and checks
