@@ -10,6 +10,21 @@ The idea comes from [a post by u/DrkWzrd on r/huggingface](https://www.reddit.co
 arguing that a one-shot TIFF implementation is a good test of a frontier model, and that models go wrong writing out
 the CCITT Group 3 and Group 4 code tables.
 
+A fax machine scans a page into black and white dots and codes it by the
+[fax standards](https://www.loc.gov/preservation/digital/formats/fdd/fdd000136.shtml) of the CCITT, today's ITU-T.
+Group 3, from 1980, writes each line as runs of white and black and gives each run a
+[code of variable length](https://en.wikipedia.org/wiki/Modified_Huffman_coding); Group 4, from 1984, also uses how
+alike each line is to the one above. TIFF, the *Tagged Image File Format* from Aldus and Microsoft
+([version 6.0 in 1992](https://www.loc.gov/preservation/digital/formats/fdd/fdd000022.shtml)), describes an image in
+numbered tags and can hold the page in those same codes. Fax software stored pages this way for years before
+[RFC 2306](https://www.rfc-editor.org/rfc/rfc2306) wrote the practice down in 1998 as TIFF-F, or "TIFF Class F".
+Group 4 TIFF also became a [master format](https://www.loc.gov/preservation/digital/formats/fdd/fdd000024.shtml) for
+scanned pages in digital libraries and document-management systems. Fax is still in daily use: in 2025, 40% of US
+hospitals often sent patient records to other providers by mail or fax, and 81% received them that way at least
+sometimes ([ONC, from the American Hospital Association's IT Survey](https://healthit.gov/data/quickstats/methods-used-hospitals-engage-interoperable-exchange/)).
+Decoding these codes is old, exact and thoroughly documented work, so it tests whether a model can reproduce such
+work rather than approximate it.
+
 ## Run it
 
 With a model served locally by [Ollama](https://ollama.com), started with room for a long answer (Ollama's
