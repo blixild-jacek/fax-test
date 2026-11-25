@@ -132,7 +132,7 @@ The code a model writes runs on your machine, so the grader confines it:
   system, 1 GB of memory and no swap, one CPU, at most 64 processes, every capability dropped and a time limit
   inside the container. None of your files is visible in it except the module's own folder, and the grader never
   follows a link or opens a pipe the module leaves there. The image is pulled once; an interrupted run stops its
-  containers.
+  containers. Checked with Docker 29.5 (Colima) on macOS, which runs the same Linux containers.
 - **`--sandbox none`** runs the code unconfined, with your rights. Use it only for code you have read.
 
 `python3 faxtest.py selftest` checks the grader on decoders whose scores are known before they run (libtiff through
@@ -178,6 +178,5 @@ connection check uses a listener on your own machine.
 ## Status and licence
 
 An example to adapt, not a maintained product. The picture at the top is an illustration, made with an image
-model. The Docker sandbox has not yet been run by us end to end (the
-machine it was written on had no room for Docker's image); the macOS sandbox and the whole test have. MIT licence, see [LICENSE](LICENSE). Copyright (c) 2026 Jacek
-Garbuliński Blixild, [blixild.com](https://blixild.com).
+model. MIT licence, see [LICENSE](LICENSE). Copyright (c) 2026 Jacek Garbuliński Blixild,
+[blixild.com](https://blixild.com).

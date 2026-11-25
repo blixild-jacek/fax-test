@@ -295,7 +295,8 @@ def run_one(code_path, tif_path, timeout=60, sandbox='sandbox-exec', site=False,
         with open(os.path.join(tmp, 'stderr.txt'), 'w+b') as err:
             p = subprocess.Popen(cmd, cwd=tmp, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=err,
                                  env=child_env)
-            t_end, checked, why = time.time() + wait, 0.0, None
+            t0 = time.time()
+            t_end, checked, why = t0 + wait, 0.0, None
             while p.poll() is None:
                 now = time.time()
                 if now > t_end:
@@ -320,7 +321,9 @@ def run_one(code_path, tif_path, timeout=60, sandbox='sandbox-exec', site=False,
             if p.returncode != 0:
                 msg = last_error(err)
                 if p.returncode in (-9, -24, 137, 152) and not msg:
-                    raise RuntimeError(f'timeout after {timeout} s')   # killed, or out of CPU time
+                    if time.time() - t0 < timeout * 0.9:   # killed early: the container's memory limit
+                        raise RuntimeError('stopped: killed by the sandbox\'s limits (memory)')
+                    raise RuntimeError(f'timeout after {timeout} s')   # killed at the time limit, or out of CPU time
                 raise RuntimeError(msg or f'exit {p.returncode}')
         return read_output(os.path.join(tmp, 'out.bin'))
     finally:
