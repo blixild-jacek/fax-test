@@ -23,7 +23,12 @@ import json
 import os
 import re
 import shutil
+import socket
+import stat
 import subprocess
+import sysconfig
+import textwrap
+import threading
 import sys
 import tempfile
 import time
@@ -46,8 +51,27 @@ CCITT = ('ccitt_rle', 'g3_1d', 'g3_2d', 'g4')
 FORBIDDEN = re.compile(r'\b(subprocess|ctypes|cffi|os\.system|os\.popen|os\.exec\w*|os\.spawn\w*|PIL|numpy|'
                        r'tifffile|imageio|cv2|libtiff)\b')
 
+OUT_LIMIT = 64 << 20          # bytes a module may write to any file, its output included
+MEM_LIMIT = 1536 << 20        # resident memory before the module is stopped
+SAFE_ENV = {'PATH': '/usr/bin:/bin'}   # all a sandboxed module gets of your environment: no keys, no home
+
 RUNNER = r'''
-import json, sys, time
+import json, os, resource, sys, threading, time
+FSIZE, MEM, CPU = int(sys.argv[3]), int(sys.argv[4]), int(sys.argv[5])
+resource.setrlimit(resource.RLIMIT_FSIZE, (FSIZE, FSIZE))
+resource.setrlimit(resource.RLIMIT_CPU, (CPU, CPU))
+SCALE = 1 if sys.platform == 'darwin' else 1024          # ru_maxrss: bytes on macOS, kilobytes on Linux
+
+
+def watch():
+    while True:
+        if resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * SCALE > MEM:
+            os.write(2, b'MemoryError: the module used more than the memory limit\n')
+            os._exit(137)
+        time.sleep(0.05)
+
+
+threading.Thread(target=watch, daemon=True).start()
 sys.path.insert(0, '.')
 t0 = time.perf_counter()
 import submission
@@ -55,6 +79,8 @@ t1 = time.perf_counter()
 data = open(sys.argv[1], 'rb').read()
 w, h, c, px = submission.decode(data)
 t2 = time.perf_counter()
+if not all(type(v) is int for v in (w, h, c)):
+    raise TypeError('decode() must return int width, height and channels')
 px = bytes(px)
 with open(sys.argv[2], 'wb') as f:
     f.write(json.dumps({'width': w, 'height': h, 'channels': c, 'import_s': t1 - t0, 'decode_s': t2 - t1}).encode()
@@ -64,38 +90,97 @@ with open(sys.argv[2], 'wb') as f:
 
 # ---- the sandbox ----
 
+RUN_ID = uuid.uuid4().hex[:12]   # labels this run's containers, so an interrupted run can stop them
+
+
 def pick_sandbox(choice='auto'):
     """'sandbox-exec' (macOS), 'docker' or 'none'. auto: sandbox-exec on macOS, else Docker if it answers."""
     if choice in ('sandbox-exec', 'docker', 'none'):
         return choice
     if sys.platform == 'darwin' and shutil.which('sandbox-exec'):
         return 'sandbox-exec'
-    if shutil.which('docker') and subprocess.run(['docker', 'info'], capture_output=True).returncode == 0:
-        return 'docker'
+    if shutil.which('docker'):
+        try:
+            if subprocess.run(['docker', 'info'], capture_output=True, timeout=20).returncode == 0:
+                return 'docker'
+        except subprocess.TimeoutExpired:
+            pass
     raise SystemExit('No sandbox found: on macOS sandbox-exec is built in; elsewhere install and start Docker. '
                      'To run the model\'s code unconfined on your machine, pass --sandbox none (not recommended).')
 
 
-def macos_profile(tmp):
-    """sandbox-exec rules: no network, no child processes, no writing outside its folder, no reading your home folder
-    or this folder; Python's own files stay readable. Later rules win over earlier ones."""
-    real = os.path.realpath
-    py = sorted({real(p) for p in (sys.prefix, sys.base_prefix, os.path.dirname(real(sys.executable)))})
-    return f'''(version 1)
-(allow default)
-(deny network*)
-(deny process-fork)
-(deny file-write*)
-(allow file-write* (subpath "{real(tmp)}") (literal "/dev/null"))
-(deny file-read* (subpath "{real(os.path.expanduser('~'))}") (subpath "{real(HERE)}"))
-(allow file-read* (subpath "{real(tmp)}") {' '.join(f'(subpath "{p}")' for p in py)})
-'''
+def sb_path(p):
+    """A path as a quoted string in a sandbox profile."""
+    return '"' + os.path.realpath(p).replace('\\', '\\\\').replace('"', '\\"') + '"'
+
+
+def macos_profile(tmp, allow_site=False):
+    """sandbox-exec rules, everything denied unless allowed: start this Python, read the system's libraries, Python's
+    standard library and its own folder, write only there. No network, no other program, no child process, no
+    system services, nothing of your files; third-party packages hidden unless allow_site (the selftest's oracle)."""
+    exe = sys.executable
+    py = sorted({os.path.realpath(p) for p in (sys.prefix, sys.base_prefix, os.path.dirname(os.path.realpath(exe)))})
+    site = sorted({os.path.realpath(sysconfig.get_paths()[k]) for k in ('purelib', 'platlib')})
+    hide = '' if allow_site else '(deny file-read* ' + ' '.join(f'(subpath {sb_path(p)})' for p in site) + ')'
+    return f"""(version 1)
+(deny default)
+(allow process-exec (literal {sb_path(exe)}) (literal {sb_path(os.path.realpath(exe))}))
+(allow file-read-metadata)
+(allow file-read* (literal "/") (subpath "/System") (subpath "/usr/lib") (subpath "/private/var/db/dyld")
+  (literal "/dev/urandom") (literal "/dev/null") (subpath {sb_path(tmp)}) {' '.join(f'(subpath {sb_path(p)})' for p in py)})
+{hide}
+(allow file-write* (subpath {sb_path(tmp)}) (literal "/dev/null"))
+(allow sysctl-read)
+"""
 
 
 def ensure_image():
     if subprocess.run(['docker', 'image', 'inspect', DOCKER_IMAGE], capture_output=True).returncode != 0:
         print(f'pulling {DOCKER_IMAGE} (once) ...', file=sys.stderr)
         subprocess.run(['docker', 'pull', '-q', DOCKER_IMAGE], check=True)
+
+
+def stop_containers():
+    ids = subprocess.run(['docker', 'ps', '-q', '--filter', f'label=faxtest-run={RUN_ID}'],
+                         capture_output=True, text=True).stdout.split()
+    if ids:
+        subprocess.run(['docker', 'kill', *ids], capture_output=True)
+
+
+def read_output(path):
+    """out.bin as written by the runner: a regular file, not a link, at most OUT_LIMIT bytes."""
+    try:
+        fd = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))
+    except FileNotFoundError:
+        raise RuntimeError('no output: the module ended before decode() returned')
+    except OSError as e:
+        raise RuntimeError(f'output not readable: {e.strerror}')
+    with os.fdopen(fd, 'rb') as f:
+        if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+            raise RuntimeError('output is not a regular file')
+        data = f.read(OUT_LIMIT + 1)
+    if len(data) > OUT_LIMIT:
+        raise RuntimeError('output larger than the limit')
+    head, _, px = data.partition(b'\n')
+    try:
+        head = json.loads(head)
+    except ValueError:
+        raise RuntimeError('output header unreadable')
+    if not isinstance(head, dict) or not all(type(head.get(k)) is int for k in ('width', 'height', 'channels')):
+        raise RuntimeError('decode() must return int width, height and channels')
+    return head, px
+
+
+def last_error(path):
+    """The last line the module wrote to stderr, at most 300 characters, read from the end of the file."""
+    try:
+        with open(path, 'rb') as f:
+            f.seek(max(0, os.fstat(f.fileno()).st_size - 4096))
+            tail = f.read().decode('utf-8', 'replace')
+    except OSError:
+        return ''
+    lines = [ln for ln in tail.strip().splitlines() if ln.strip() and 'MallocStackLogging' not in ln]
+    return lines[-1][:300] if lines else ''
 
 
 def run_one(code_path, tif_path, timeout=60, sandbox='sandbox-exec', site=False, env=None):
@@ -106,36 +191,37 @@ def run_one(code_path, tif_path, timeout=60, sandbox='sandbox-exec', site=False,
     try:
         shutil.copy(code_path, os.path.join(tmp, 'submission.py'))
         shutil.copy(tif_path, os.path.join(tmp, 'in.tif'))
-        with open(os.path.join(tmp, 'runner.py'), 'w') as f:
+        with open(os.path.join(tmp, 'runner.py'), 'w', encoding='utf-8') as f:
             f.write(RUNNER)
-        py_args = ['-I', '-B'] + ([] if site else ['-S']) + ['runner.py', 'in.tif', 'out.bin']
-        name = None
+        limits = [str(OUT_LIMIT), str(MEM_LIMIT), str(timeout)]
+        py_args = ['-I', '-B', '-X', 'utf8'] + ([] if site else ['-S']) + ['runner.py', 'in.tif', 'out.bin'] + limits
         if sandbox == 'docker':
-            name = 'faxtest-' + uuid.uuid4().hex[:12]
             user = ['--user', f'{os.getuid()}:{os.getgid()}'] if hasattr(os, 'getuid') else []
             envs = [a for k, v in (env or {}).items() for a in ('-e', f'{k}={v}')]
-            cmd = ['docker', 'run', '--rm', '--name', name, '--network', 'none', '--memory', '1g', '--cpus', '1',
-                   '--pids-limit', '64', '--read-only', '--tmpfs', '/tmp:size=64m', '--cap-drop', 'ALL',
-                   '--security-opt', 'no-new-privileges', *user, *envs, '-v', f'{tmp}:/w', '-w', '/w',
-                   DOCKER_IMAGE, 'python', *py_args]
-            timeout += 15                      # the container's start
+            cmd = ['docker', 'run', '--rm', '--label', f'faxtest-run={RUN_ID}', '--network', 'none',
+                   '--memory', '1g', '--memory-swap', '1g', '--cpus', '1', '--pids-limit', '64', '--read-only',
+                   '--tmpfs', '/tmp:size=64m', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges', *user,
+                   *envs, '-v', f'{tmp}:/w', '-w', '/w', DOCKER_IMAGE,
+                   'timeout', '-s', 'KILL', str(timeout), 'python', *py_args]
+            child_env, wait = os.environ, timeout + 30           # the Docker client's own settings; the start
         else:
             cmd = [sys.executable, *py_args]
             if sandbox == 'sandbox-exec':
-                cmd = ['sandbox-exec', '-p', macos_profile(tmp)] + cmd
-        try:
-            p = subprocess.run(cmd, cwd=tmp, capture_output=True, timeout=timeout, text=True,
-                               env={**os.environ, **(env or {})})
-        except subprocess.TimeoutExpired:
-            if name:
-                subprocess.run(['docker', 'kill', name], capture_output=True)
-            raise RuntimeError(f'timeout after {timeout} s')
+                cmd = ['sandbox-exec', '-p', macos_profile(tmp, allow_site=site)] + cmd
+            child_env, wait = {**SAFE_ENV, **(env or {})}, timeout + 5
+        with open(os.path.join(tmp, 'stderr.txt'), 'wb') as err:
+            try:
+                p = subprocess.run(cmd, cwd=tmp, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=err,
+                                   timeout=wait, env=child_env)
+            except subprocess.TimeoutExpired:
+                if sandbox == 'docker':
+                    stop_containers()
+                raise RuntimeError(f'timeout after {timeout} s')
         if p.returncode != 0:
-            lines = [ln for ln in p.stderr.strip().splitlines() if ln.strip() and 'MallocStackLogging' not in ln]
-            raise RuntimeError(lines[-1][:300] if lines else f'exit {p.returncode}')
-        with open(os.path.join(tmp, 'out.bin'), 'rb') as f:
-            head, _, px = f.read().partition(b'\n')
-        return json.loads(head), px
+            if p.returncode in (-9, -24, 137, 152) and not last_error(os.path.join(tmp, 'stderr.txt')):
+                raise RuntimeError(f'timeout after {timeout} s')   # killed, or out of CPU time
+            raise RuntimeError(last_error(os.path.join(tmp, 'stderr.txt')) or f'exit {p.returncode}')
+        return read_output(os.path.join(tmp, 'out.bin'))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -148,11 +234,12 @@ def check_one(code_path, name, meta, timeout, sandbox, site):
     t0 = time.time()
     try:
         head, px = run_one(code_path, os.path.join(CORPUS, name + '.tif'), timeout, sandbox, site)
-    except RuntimeError as e:
-        return {'status': 'timeout' if str(e).startswith('timeout') else 'error', 'error': str(e),
+    except Exception as e:   # anything one module does stays with its file
+        msg = str(e) if isinstance(e, RuntimeError) else f'{type(e).__name__}: {e}'
+        return {'status': 'timeout' if msg.startswith('timeout') else 'error', 'error': msg[:300],
                 'seconds': round(time.time() - t0, 2)}
-    r = {'seconds': round(time.time() - t0, 2), 'decode_s': round(head.get('decode_s', 0), 3),
-         'got': [head.get('width'), head.get('height'), head.get('channels'), len(px)]}
+    r = {'seconds': round(time.time() - t0, 2), 'decode_s': round(float(head.get('decode_s') or 0), 3),
+         'got': [head['width'], head['height'], head['channels'], len(px)]}
     want = (meta['width'], meta['height'], meta['channels'])
     if tuple(r['got'][:3]) != want or len(px) != len(exp):
         r.update(status='shape', want=list(want) + [len(exp)])
@@ -179,14 +266,19 @@ def summarize(files, manifest):
 
 def grade(code_path, jobs=4, timeout=60, sandbox='sandbox-exec', site=False, echo=None):
     """Runs the module at code_path on every corpus file: {'files': {name: result}, 'summary': {...}}."""
-    manifest = json.load(open(os.path.join(CORPUS, 'manifest.json')))['files']
+    manifest = json.load(open(os.path.join(CORPUS, 'manifest.json'), encoding='utf-8'))['files']
     if sandbox == 'docker':
         ensure_image()
     t0 = time.time()
-    with concurrent.futures.ThreadPoolExecutor(jobs) as ex:
-        futs = {name: ex.submit(check_one, code_path, name, meta, timeout, sandbox, site)
-                for name, meta in manifest.items()}
-        files = {name: f.result() for name, f in futs.items()}
+    try:
+        with concurrent.futures.ThreadPoolExecutor(jobs) as ex:
+            futs = {name: ex.submit(check_one, code_path, name, meta, timeout, sandbox, site)
+                    for name, meta in manifest.items()}
+            files = {name: f.result() for name, f in futs.items()}
+    except KeyboardInterrupt:
+        if sandbox == 'docker':
+            stop_containers()
+        raise
     if echo:
         for name, r in files.items():
             extra = r.get('error') or (f"{r['pixels_right']:.2%} of pixels right" if r['status'] == 'wrong' else '') \
@@ -206,22 +298,31 @@ def summary_line(s):
 
 # ---- the request ----
 
-def chat(base, key, body, timeout=900):
-    """One streamed chat request: the message (content and any reasoning), the finish reason, and its timing.
-    timeout: seconds without a byte from the server."""
+def chat(base, key, body, timeout=900, progress=print):
+    """One streamed chat request: the message (content and any reasoning), the finish reason ('cut-off' when the
+    stream ended without one), and its timing. timeout: seconds without a byte from the server."""
     headers = {'Content-Type': 'application/json', 'User-Agent': 'fax-test/1'}
     if key:
         headers['Authorization'] = f'Bearer {key}'
     req = urllib.request.Request(base.rstrip('/') + '/chat/completions', json.dumps({
         **body, 'stream': True, 'stream_options': {'include_usage': True}}).encode(), headers)
-    t0, first, usage, finish = time.time(), None, {}, None
+    t0, first, usage, finish, done, shown = time.time(), None, {}, None, False, time.time()
     msg = {'content': '', 'reasoning': ''}
     with urllib.request.urlopen(req, timeout=timeout) as r:
         for line in r:
             line = line.decode('utf-8', 'replace').strip()
-            if not line.startswith('data: ') or line == 'data: [DONE]':
+            if not line.startswith('data:'):
                 continue
-            ev = json.loads(line[6:])
+            data = line[5:].strip()
+            if data == '[DONE]':
+                done = True
+                continue
+            try:
+                ev = json.loads(data)
+            except ValueError:
+                continue
+            if ev.get('error'):
+                raise RuntimeError(f"server error: {str(ev['error'])[:300]}")
             usage = ev.get('usage') or usage
             for ch in ev.get('choices') or []:
                 finish = ch.get('finish_reason') or finish
@@ -231,22 +332,44 @@ def chat(base, key, body, timeout=900):
                     first = time.time()
                 msg['content'] += text
                 msg['reasoning'] += thought
+            if time.time() - shown > 30:
+                shown = time.time()
+                progress(f"    ... {time.time() - t0:.0f} s, {len(msg['reasoning']):,} characters of reasoning, "
+                         f"{len(msg['content']):,} of answer")
     t1 = time.time()
     n_out = usage.get('completion_tokens') or 0
     gen = t1 - (first or t1)
-    return msg, finish, {'seconds': round(t1 - t0, 1), 'first_token_s': round((first or t1) - t0, 2),
-                         'prompt_tokens': usage.get('prompt_tokens'), 'completion_tokens': n_out,
-                         'tokens_per_s': round(n_out / gen, 1) if gen > 0.05 and n_out > 1 else None}
+    return msg, finish or ('stop' if done else 'cut-off'), {
+        'seconds': round(t1 - t0, 1), 'first_token_s': round((first or t1) - t0, 2),
+        'prompt_tokens': usage.get('prompt_tokens'), 'completion_tokens': n_out,
+        'tokens_per_s': round(n_out / gen, 1) if gen > 0.05 and n_out > 1 else None}
 
 
 def extract_code(text):
-    """The module from an answer: the longest fenced block that defines decode(); an unclosed last fence (an answer
-    cut off by the token limit) counts up to the end. None when there is none."""
-    blocks = re.findall(r'```[ \t]*(?:python|py|python3)?[ \t]*\n(.*?)(?:\n```|\Z)', text, re.S)
-    blocks = [b for b in blocks if re.search(r'^\s*def decode\s*\(', b, re.M)]
-    if not blocks and re.search(r'^def decode\s*\(', text, re.M):
-        blocks = [text]
-    return max(blocks, key=len) if blocks else None
+    """The module from an answer: the longest fenced code block that defines decode(), Python-tagged or untagged
+    ones first; fences may be indented, tagged in any case, ``` or ~~~; an unclosed last block (an answer cut off by
+    the token limit) counts up to the end. An answer that is only code counts whole. None when there is none."""
+    lines = text.replace('\r\n', '\n').replace('\r', '\n').split('\n')
+    blocks, cur, lang, fence = [], None, '', ''
+    for ln in lines:
+        st = ln.strip()
+        if cur is None:
+            m = re.match(r'(`{3,}|~{3,})\s*([\w+.-]*)', st)
+            if m:
+                fence, lang, cur = m.group(1), m.group(2).lower(), []
+        elif re.fullmatch(re.escape(fence[0]) + '{%d,}' % len(fence), st):
+            blocks.append((lang, '\n'.join(cur)))
+            cur = None
+        else:
+            cur.append(ln)
+    if cur is not None:
+        blocks.append((lang, '\n'.join(cur)))
+    defines = lambda b: re.search(r'^\s*def decode\s*\(', b, re.M)  # noqa: E731
+    good = [b for t, b in blocks if t in ('', 'python', 'py', 'python3') and defines(b)] or \
+        [b for t, b in blocks if defines(b)]
+    if not good and not blocks and re.search(r'^def decode\s*\(', text, re.M):
+        good = [text]
+    return textwrap.dedent(max(good, key=len)) if good else None
 
 
 def feedback_text(g, manifest):
@@ -280,19 +403,21 @@ def ask_and_grade(base, key, body, *, timeout, jobs, sandbox, echo):
         msg, finish, m = chat(base, key, body, timeout=timeout)
     except urllib.error.HTTPError as e:
         return {'error': f'HTTP {e.code} {e.read().decode(errors="replace")[:300]}'}
-    except (urllib.error.URLError, TimeoutError, OSError, ValueError) as e:
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError, RuntimeError) as e:
         return {'error': f'{type(e).__name__}: {e}'}
-    turn = {'max_tokens': body['max_tokens'], 'finish': finish, 'timing': m, 'answer': msg['content'],
+    turn = {'max_tokens': body.get('max_tokens'), 'finish': finish, 'timing': m, 'answer': msg['content'],
             'reasoning': msg['reasoning'], 'code': extract_code(msg['content']), 'grade': None}
     echo(f"  {m['seconds']:.0f} s, {m['completion_tokens']} tokens out, finish {finish}; "
          f"answer {len(msg['content'])} characters, reasoning {len(msg['reasoning'])}")
+    if finish == 'cut-off':
+        echo('  the stream ended without a finish reason: the answer may be incomplete')
     if finish == 'length' and turn['code'] is None:
         echo('  the token limit ended the answer before any code (raise --max-tokens for a reasoning model)')
     if turn['code'] is None:
         echo('  no module with decode() in the answer: 0 files')
         return turn
     turn['code_lines'] = turn['code'].count('\n') + 1
-    with tempfile.NamedTemporaryFile('w', suffix='.py', delete=False) as f:
+    with tempfile.NamedTemporaryFile('w', suffix='.py', delete=False, encoding='utf-8') as f:
         f.write(turn['code'])
     try:
         turn['grade'] = grade(f.name, jobs=jobs, sandbox=sandbox, echo=echo)
@@ -303,12 +428,13 @@ def ask_and_grade(base, key, body, *, timeout, jobs, sandbox, echo):
 
 
 def run_test(base, key, model, *, max_tokens=32768, extra=None, turns=0, context=None, timeout=900, jobs=4,
-             sandbox='sandbox-exec', echo=print):
+             sandbox='sandbox-exec', echo=print, save=None):
     """The first request and its grade (the one-shot score), then up to `turns` more, each told its results, until
     every file passes. context: the model's tokens per request, so a later turn's max_tokens fits the conversation.
-    Returns the record: the first turn at the top level, later turns in record['feedback']."""
-    prompt = open(PROMPT).read()
-    manifest = json.load(open(os.path.join(CORPUS, 'manifest.json')))['files']
+    max_tokens 0 sends no limit (for APIs that want it under another name in extra). save(record) runs after each
+    turn. Returns the record: the first turn at the top level, later turns in record['feedback']."""
+    prompt = open(PROMPT, encoding='utf-8').read()
+    manifest = json.load(open(os.path.join(CORPUS, 'manifest.json'), encoding='utf-8'))['files']
     messages = [{'role': 'user', 'content': prompt}]
     rec = {'bench': 'fax-test', 'version': 1, 'model': model, 'api_host': urllib.parse.urlparse(base).hostname,
            'started': datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
@@ -318,17 +444,22 @@ def run_test(base, key, model, *, max_tokens=32768, extra=None, turns=0, context
     prompt_tokens = None
     for n in range(turns + 1):
         budget = max_tokens
-        if context and prompt_tokens:   # the last prompt, plus the answer and feedback added since
-            added = sum(len(x['content']) for x in messages[-2:])
-            budget = min(max_tokens, context - prompt_tokens - added * 2 // 5 - 1024)
+        if context and max_tokens > 0:   # the prompt so far (measured, or estimated at 2.5 characters a token)
+            if prompt_tokens:
+                used = prompt_tokens + sum(len(x['content']) for x in messages[-2:]) * 2 // 5
+            else:
+                used = sum(len(x['content']) for x in messages) * 2 // 5
+            budget = min(max_tokens, context - used - 1024)
             if budget < 4000:
-                echo(f'  turn {n + 1}: the conversation leaves {budget} tokens: stopped')
+                echo(f'  turn {n + 1}: the conversation leaves {budget} tokens of {context}: stopped')
                 rec['stopped'] = 'context full'
                 break
-        body = {'model': model, 'messages': messages, 'max_tokens': budget, **(extra or {})}
+        body = {'model': model, 'messages': messages, **({'max_tokens': budget} if budget > 0 else {}), **(extra or {})}
         echo(f'  turn {n + 1} of {turns + 1}:')
         turn = ask_and_grade(base, key, body, timeout=timeout, jobs=jobs, sandbox=sandbox, echo=echo)
         (rec.update(turn) if n == 0 else rec['feedback'].append(turn))
+        if save:
+            save(rec)
         if 'error' in turn:
             echo('  ' + turn['error'])
             break
@@ -342,6 +473,8 @@ def run_test(base, key, model, *, max_tokens=32768, extra=None, turns=0, context
     rec['final'] = {'passed_by_turn': [(t.get('grade') or {}).get('summary', {}).get('passed', 0) for t in done],
                     'ccitt_by_turn': [(t.get('grade') or {}).get('summary', {}).get('ccitt_passed', 0) for t in done],
                     'tokens_out': sum(t['timing']['completion_tokens'] for t in done)}
+    if save:
+        save(rec)
     return rec
 
 
@@ -360,32 +493,52 @@ def decode(data):
 '''
 STRIPS_ONLY = {'raw_gray8', 'raw_rgb8', 'raw_rgb8_strips_be', 'deflate_gray8', 'deflate_rgb8_predictor',
                'deflate_old_code_rgb8'}   # what check/strips_only.py handles: 8-bit gray/RGB strips, none/Deflate
+PROBE_BITS = ('read this folder', 'connect', 'child process', 'write outside its folder', 'start a program',
+              'read /etc/hosts', 'import an installed package')
+# what a module may do inside each sandbox: inside a throwaway container, processes and the container's own /etc
+# reach nothing of yours (bits 4, 16, 32); under sandbox-exec, nothing
+PROBE_ALLOWED = {'sandbox-exec': 0, 'docker': 4 | 16 | 32}
+
+
+def site_package():
+    """(site-packages folder, a package installed there) for the probe, or ('', '')."""
+    for d in sysconfig.get_paths()['purelib'], sysconfig.get_paths()['platlib']:
+        for name in ('pip', 'setuptools', 'PIL', 'numpy'):
+            if os.path.isdir(os.path.join(d, name)):
+                return d, name
+    return '', ''
 
 
 def selftest(sandbox, jobs=4):
     """Decoders whose scores are known before they run (check/): the grader must give exactly those; then what the
     sandbox lets a module do."""
-    manifest = json.load(open(os.path.join(CORPUS, 'manifest.json')))['files']
+    manifest = json.load(open(os.path.join(CORPUS, 'manifest.json'), encoding='utf-8'))['files']
     n, ok = len(manifest), True
-    try:
-        import PIL  # noqa: F401
-        have_pil = sandbox != 'docker'
-    except ImportError:
-        have_pil = False
+    have_pil = False
+    if sandbox != 'docker':   # Pillow as the sandboxed module would see it (site packages allowed for the oracle)
+        with tempfile.NamedTemporaryFile('w', suffix='.py', delete=False, encoding='utf-8') as f:
+            f.write('from PIL import Image\n\n\ndef decode(data):\n    return 1, 1, 1, b"\\x00"\n')
+        try:
+            run_one(f.name, os.path.join(CORPUS, 'raw_gray8.tif'), sandbox=sandbox, site=True)
+            have_pil = True
+        except RuntimeError:
+            pass
+        finally:
+            os.unlink(f.name)
     oracle = os.path.join(CHECK, 'oracle_pillow.py')
-    off = tempfile.NamedTemporaryFile('w', suffix='.py', delete=False)
-    off.write(open(oracle).read() + OFF_BY_ONE)
+    off = tempfile.NamedTemporaryFile('w', suffix='.py', delete=False, encoding='utf-8')
+    off.write(open(oracle, encoding='utf-8').read() + OFF_BY_ONE)
     off.close()
     cases = [  # (file, site packages, expected passes, every other file's status, what it shows)
         (os.path.join(CHECK, 'blank.py'), False, set(), 'shape', 'a 1x1 white image: every file the wrong size'),
         (os.path.join(CHECK, 'strips_only.py'), False, STRIPS_ONLY, None,
-         'a 60-line decoder for 8-bit strips, none or Deflate: exactly those 6 files'),
+         'a 40-line decoder for 8-bit strips, none or Deflate: exactly those 6 files'),
     ]
     if have_pil:
         cases = [(oracle, True, set(manifest), None, 'libtiff through Pillow: every file'),
                  (off.name, True, set(), 'wrong', 'the same with one sample changed per image: every file wrong')] + cases
     else:
-        print('skipped the Pillow oracle (Pillow is not installed here, or the Docker sandbox has no Pillow)')
+        print('skipped the Pillow oracle (Pillow is not installed for this Python, or the sandbox is Docker)')
     try:
         for path, site, want, others, what in cases:
             g = grade(path, jobs=jobs, sandbox=sandbox, site=site)
@@ -402,16 +555,24 @@ def selftest(sandbox, jobs=4):
     if sandbox == 'none':
         print('no sandbox: its check is skipped')
     else:
-        target = os.path.join(HERE, 'README.md')
-        _, px = run_one(os.path.join(CHECK, 'escape_probe.py'), os.path.join(CORPUS, 'raw_gray8.tif'),
-                        sandbox=sandbox, env={'FAXTEST_PROBE': target})
-        flags = px[0]
-        allowed = 4 if sandbox == 'docker' else 0   # a child process inside a throwaway container reaches nothing
+        listener = socket.socket()
+        listener.bind(('127.0.0.1', 0))
+        listener.listen(4)
+        site_dir, package = site_package()
+        try:
+            _, px = run_one(os.path.join(CHECK, 'escape_probe.py'), os.path.join(CORPUS, 'raw_gray8.tif'),
+                            sandbox=sandbox, env={'FAXTEST_PROBE': os.path.join(HERE, 'README.md'),
+                                                  'FAXTEST_PORT': str(listener.getsockname()[1]),
+                                                  'FAXTEST_SITE': site_dir, 'FAXTEST_PACKAGE': package})
+        finally:
+            listener.close()
+        flags, allowed = px[0], PROBE_ALLOWED[sandbox]
         good = flags & ~allowed == 0
         ok &= good
-        print(f"{'ok ' if good else 'BAD'} escape_probe.py         read this folder {bool(flags & 1)}, network "
-              f"{bool(flags & 2)}, child process {bool(flags & 4)}{' (inside the container)' if sandbox == 'docker' else ''}, "
-              f"write outside its folder {bool(flags & 8)}")
+        done = ', '.join(f"{w} {'yes' if flags & (1 << i) else 'no'}" for i, w in enumerate(PROBE_BITS))
+        print(f"{'ok ' if good else 'BAD'} escape_probe.py          {done}"
+              + (' (yes is allowed inside the container for child process, start a program, read /etc/hosts)'
+                 if sandbox == 'docker' else ''))
     print(f"selftest {'passed' if ok else 'FAILED'} (sandbox: {sandbox})")
     return ok
 
@@ -422,7 +583,7 @@ def table(paths):
     head = ['model', 'started (UTC)', 'turns', 'tokens out', 'files by turn', 'best', 'CCITT best', *CATEGORIES]
     print('| ' + ' | '.join(head) + ' |\n|' + '---|' * len(head))
     for p in paths:
-        r = json.load(open(p))
+        r = json.load(open(p, encoding='utf-8'))
         if r.get('bench') != 'fax-test':
             continue
         turns = [t for t in [r] + r.get('feedback', []) if 'error' not in t]
@@ -445,7 +606,8 @@ def main():
     r.add_argument('--base-url', default=os.environ.get('OPENAI_BASE_URL'),
                    help='the API base ending in /v1 (default: $OPENAI_BASE_URL), e.g. http://localhost:11434/v1')
     r.add_argument('--api-key-env', default='OPENAI_API_KEY', help='the variable holding the key (local servers need none)')
-    r.add_argument('--max-tokens', type=int, default=32768, help='output tokens per request, reasoning included')
+    r.add_argument('--max-tokens', type=int, default=32768,
+                   help='output tokens per request, reasoning included; 0 sends no limit (then use --extra)')
     r.add_argument('--turns', type=int, default=0, help='feedback turns after the first answer (default 0: one-shot)')
     r.add_argument('--context', type=int, help="the model's tokens per request, so later turns fit")
     r.add_argument('--temperature', type=float)
@@ -462,9 +624,27 @@ def main():
 
     if a.cmd == 'table':
         return table(a.files or sorted(glob.glob(os.path.join(RESULTS, '*.json'))))
+    if a.jobs < 1:
+        sys.exit('--jobs must be 1 or more')
+    if a.cmd == 'grade' and not os.path.isfile(a.code):
+        sys.exit(f'no such file: {a.code}')
+    if a.cmd == 'run':
+        if a.turns < 0 or a.max_tokens < 0:
+            sys.exit('--turns and --max-tokens must be 0 or more')
+        if not a.base_url:
+            sys.exit('give --base-url (or set OPENAI_BASE_URL), e.g. --base-url http://localhost:11434/v1 for Ollama')
+        try:
+            extra = json.loads(a.extra) if a.extra else {}
+        except ValueError as e:
+            sys.exit(f'--extra is not valid JSON: {e}')
+        if not isinstance(extra, dict):
+            sys.exit('--extra must be a JSON object, e.g. \'{"top_p": 0.95}\'')
     sandbox = pick_sandbox(a.sandbox)
     if sandbox == 'none':
         print('WARNING: --sandbox none runs the model\'s code on your machine with your rights.', file=sys.stderr)
+    elif sandbox == 'sandbox-exec' and sys.version_info < (3, 12):
+        print(f'note: the prompt asks for Python 3.12 and the code runs on this Python {sys.version.split()[0]}; '
+              'code that needs 3.12 will fail here (Docker runs 3.12).', file=sys.stderr)
     if a.cmd == 'selftest':
         sys.exit(0 if selftest(sandbox, a.jobs) else 1)
     if a.cmd == 'grade':
@@ -473,22 +653,29 @@ def main():
         if res['summary']['forbidden_words']:
             print('note: the code names', ', '.join(res['summary']['forbidden_words']))
         if a.json:
-            json.dump(res, open(a.json, 'w'), indent=1)
+            with open(a.json, 'w', encoding='utf-8') as f:
+                json.dump(res, f, indent=1, ensure_ascii=False)
         return
-    if not a.base_url:
-        sys.exit('give --base-url (or set OPENAI_BASE_URL), e.g. --base-url http://localhost:11434/v1 for Ollama')
-    extra = json.loads(a.extra) if a.extra else {}
     if a.temperature is not None:
         extra['temperature'] = a.temperature
-    rec = run_test(a.base_url, os.environ.get(a.api_key_env), a.model, max_tokens=a.max_tokens, extra=extra or None,
-                   turns=a.turns, context=a.context, timeout=a.timeout, jobs=a.jobs, sandbox=sandbox)
     os.makedirs(RESULTS, exist_ok=True)
     stem = os.path.join(RESULTS, re.sub(r'[^A-Za-z0-9._-]+', '_', a.model) + '-' +
                         datetime.datetime.now().strftime('%Y%m%d-%H%M%S'))
-    json.dump(rec, open(stem + '.json', 'w'), indent=1, ensure_ascii=False)
-    for k, turn in enumerate([rec] + rec['feedback'], 1):
-        if turn.get('code'):
-            open(f'{stem}.turn{k}.py', 'w').write(turn['code'])
+
+    def save(rec):
+        with open(stem + '.json', 'w', encoding='utf-8') as f:
+            json.dump(rec, f, indent=1, ensure_ascii=False)
+        for k, turn in enumerate([rec] + rec['feedback'], 1):
+            if turn.get('code'):
+                with open(f'{stem}.turn{k}.py', 'w', encoding='utf-8') as f:
+                    f.write(turn['code'])
+
+    try:
+        rec = run_test(a.base_url, os.environ.get(a.api_key_env), a.model, max_tokens=a.max_tokens,
+                       extra=extra or None, turns=a.turns, context=a.context, timeout=a.timeout, jobs=a.jobs,
+                       sandbox=sandbox, save=save)
+    except KeyboardInterrupt:
+        sys.exit(f'\nstopped; the turns so far are in {os.path.relpath(stem, HERE)}.json')
     best = max(rec['final']['passed_by_turn'], default=0)
     print(f"\nThe Fax Test, {a.model}: {best}/40 files at best, CCITT "
           f"{max(rec['final']['ccitt_by_turn'], default=0)}/19; files by turn {rec['final']['passed_by_turn']}; "
