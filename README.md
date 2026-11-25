@@ -6,7 +6,7 @@ Can a language model write a complete TIFF decoder, fax compression included, in
 model once, through any OpenAI-compatible API, runs the code it writes on 40 TIFF files in a sandbox, and counts a
 file only if every pixel is right.
 
-The idea comes from a [comment on r/huggingface](https://www.reddit.com/r/huggingface/comments/1y3naa1/comment/19t60einyyqxt/?context=3)
+The idea comes from [a post by u/DrkWzrd on r/huggingface](https://www.reddit.com/r/huggingface/comments/1y3naa1/silly_thought_the_best_benchmark_to_an_actual/)
 arguing that a one-shot TIFF implementation is a good test of a frontier model, and that models go wrong writing out
 the CCITT Group 3 and Group 4 code tables.
 
