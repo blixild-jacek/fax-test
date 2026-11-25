@@ -15,23 +15,28 @@ right. With --turns N the model then sees which files failed and why, and writes
 Standard library only, Python 3.10 or newer. The sandbox is sandbox-exec on macOS and a throwaway Docker container
 elsewhere (--sandbox); see README.md.
 """
-import argparse
-import concurrent.futures
-import ctypes
-import datetime
-import glob
-import json
-import os
-import re
-import shutil
-import socket
-import stat
-import subprocess
-import sysconfig
-import textwrap
-import threading
 import sys
-import tempfile
+
+if sys.version_info < (3, 10):
+    sys.exit('The Fax Test needs Python 3.10 or newer; this is ' + sys.version.split()[0] + '. On macOS, /usr/bin/python3 '
+             'is Apple\'s 3.9: install Python from python.org, Homebrew (brew install python) or uv.')
+
+import argparse                                                     # noqa: E402
+import concurrent.futures                                           # noqa: E402
+import ctypes                                                       # noqa: E402
+import datetime                                                     # noqa: E402
+import glob                                                         # noqa: E402
+import http.client                                                  # noqa: E402
+import json                                                         # noqa: E402
+import os                                                           # noqa: E402
+import re                                                           # noqa: E402
+import shutil                                                       # noqa: E402
+import socket                                                       # noqa: E402
+import stat                                                         # noqa: E402
+import subprocess                                                   # noqa: E402
+import sysconfig                                                    # noqa: E402
+import tempfile                                                     # noqa: E402
+import textwrap                                                     # noqa: E402
 import time
 import urllib.error
 import urllib.parse
@@ -54,14 +59,19 @@ FORBIDDEN = re.compile(r'\b(subprocess|ctypes|cffi|os\.system|os\.popen|os\.exec
 
 OUT_LIMIT = 64 << 20          # bytes a module may write to any one file, its output included
 DISK_LIMIT = 256 << 20        # bytes it may write in all
-MEM_LIMIT = 1536 << 20        # memory it may use (measured by the grader, from outside the sandbox)
+MEM_LIMIT = 1 << 30           # memory it may use: measured by the grader from outside (macOS); Docker sets its own
 SAFE_ENV = {'PATH': '/usr/bin:/bin'}   # all a sandboxed module gets of your environment: no keys, no home
+if os.name == 'nt':                    # what Windows' Python needs to start (--sandbox none)
+    SAFE_ENV = {'PATH': os.environ.get('PATH', ''), 'SYSTEMROOT': os.environ.get('SYSTEMROOT', '')}
+PROCS = set()                          # the processes grading right now, stopped on Ctrl-C
 
 RUNNER = r'''
-import json, resource, sys, time
-FSIZE, CPU = int(sys.argv[3]), int(sys.argv[4])
-resource.setrlimit(resource.RLIMIT_FSIZE, (FSIZE, FSIZE))
-resource.setrlimit(resource.RLIMIT_CPU, (CPU, CPU))
+import json, sys, time
+try:                        # no file larger than this; the time limit is the grader's, from outside
+    import resource
+    resource.setrlimit(resource.RLIMIT_FSIZE, (int(sys.argv[3]), int(sys.argv[3])))
+except ImportError:         # Windows
+    pass
 sys.path.insert(0, '.')
 t0 = time.perf_counter()
 import submission
@@ -119,15 +129,17 @@ def macos_profile(tmp, allow_site=False):
     paths; write only to that folder. No network, no other program or child process, no system services or system
     information, nothing of your files; third-party packages hidden unless allow_site (the selftest's oracle). The
     families of operations at the end are denied by name as well: sandbox-exec leaves reading another process's
-    arguments and environment (process-info) open under "deny default" (seen on macOS 26, November 2026)."""
+    arguments and environment (process-info) open under "deny default" (seen on macOS 26, November 2026), and
+    so it does the system calls that find a file's path from its number (fsgetpath, openbyid_np). ctypes and
+    Python's internal test modules are hidden: the prompt forbids the first, and both reach past the profile."""
     exe = sandbox_python()
     paths = sysconfig.get_paths()
     reads = ['/System', '/usr/lib', '/private/var/db/dyld', tmp] + [paths[k] for k in ('stdlib', 'platstdlib')]
-    lib = os.path.join(sys.base_prefix, 'lib')
-    if os.path.isdir(lib):                       # the native libraries Python's own modules link to
-        reads.append(lib)
-    framework = os.path.join(sys.base_prefix, 'Python')
-    files = ['/', '/dev/urandom', '/dev/null', exe] + ([framework] if os.path.exists(framework) else [])
+    if sysconfig.get_config_var('PYTHONFRAMEWORK'):   # a framework build: its own folder holds its library
+        reads.append(sys.base_prefix)
+    elif os.path.isdir(os.path.join(sys.base_prefix, 'lib')):   # the native libraries Python's modules link to
+        reads.append(os.path.join(sys.base_prefix, 'lib'))
+    files = ['/', '/dev/urandom', '/dev/null', exe]
     site = sorted({os.path.realpath(paths[k]) for k in ('purelib', 'platlib')})
     if allow_site:
         reads += site
@@ -147,6 +159,8 @@ def macos_profile(tmp, allow_site=False):
 (allow file-read* {subpaths} {literals})
 {hide}
 (allow file-write* (subpath {sb_quote(tmp)}) (literal "/dev/null"))
+(deny file-read* (regex #"/_(ctypes|test)[^/]*\\.(so|dylib)$"))
+(deny file-write-acl) (deny syscall-unix (syscall-number 217) (syscall-number 427))
 (deny process-info*) (deny sysctl*) (deny iokit*) (deny ipc*) (deny mach*) (deny network*) (deny nvram*)
 (deny user-preference*) (deny signal (target others)) (deny system-socket) (deny file-ioctl) (deny pseudo-tty)
 (deny dynamic-code-generation)
@@ -198,29 +212,43 @@ def usage(pid):
         return None, None
 
 
+def entries(path):
+    """Every file and folder below path, folders last, never following a link (a link is an entry itself)."""
+    out = []
+    try:
+        with os.scandir(path) as it:
+            for e in it:
+                if e.is_dir(follow_symlinks=False):
+                    out += entries(e.path)
+                out.append(e)
+    except OSError:
+        pass
+    return out
+
+
 def folder_bytes(path):
     total = 0
-    for root, dirs, files in os.walk(path):
-        for name in files:
-            try:
-                total += os.lstat(os.path.join(root, name)).st_size
-            except OSError:
-                pass
+    for e in entries(path):
+        try:
+            total += e.stat(follow_symlinks=False).st_size
+        except OSError:
+            pass
     return total
 
 
 def force_rmtree(path):
     """Removes a work folder whatever the module did to it (read-only folders, locked files)."""
-    for root, dirs, files in os.walk(path):
-        for name in dirs + files:
-            full = os.path.join(root, name)
-            try:
-                if hasattr(os, 'lchflags'):
-                    os.lchflags(full, 0)
-                if not os.path.islink(full):
-                    os.chmod(full, 0o700)
-            except OSError:
-                pass
+    if sys.platform == 'darwin':          # access-control lists that deny deletion
+        subprocess.run(['chmod', '-RN', path], capture_output=True)
+    for e in entries(path) + [None]:
+        full = e.path if e else path
+        try:
+            if hasattr(os, 'lchflags'):
+                os.lchflags(full, 0)
+            if not os.path.islink(full):
+                os.chmod(full, 0o700)
+        except OSError:
+            pass
     shutil.rmtree(path, ignore_errors=True)
     if os.path.exists(path):
         print(f'note: could not remove {path}', file=sys.stderr)
@@ -276,12 +304,12 @@ def run_one(code_path, tif_path, timeout=60, sandbox='sandbox-exec', site=False,
         with open(os.path.join(tmp, 'runner.py'), 'w', encoding='utf-8') as f:
             f.write(RUNNER)
         py_args = ['-I', '-B', '-X', 'utf8'] + ([] if site else ['-S']) + \
-            ['runner.py', 'in.tif', 'out.bin', str(OUT_LIMIT), str(timeout)]
+            ['runner.py', 'in.tif', 'out.bin', str(OUT_LIMIT)]
         if sandbox == 'docker':
             name = f'faxtest-{RUN_ID}-{uuid.uuid4().hex[:8]}'
             user = ['--user', f'{os.getuid()}:{os.getgid()}'] if hasattr(os, 'getuid') else []
             envs = [a for k, v in (env or {}).items() for a in ('-e', f'{k}={v}')]
-            cmd = ['docker', 'run', '--rm', '--name', name, '--label', f'faxtest-run={RUN_ID}', '--network', 'none',
+            cmd = ['docker', 'run', '--rm', '--init', '--name', name, '--label', f'faxtest-run={RUN_ID}', '--network', 'none',
                    '--memory', '1g', '--memory-swap', '1g', '--cpus', '1', '--pids-limit', '64', '--read-only',
                    '--tmpfs', '/tmp:size=64m', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges', *user,
                    *envs, '-v', f'{tmp}:/w', '-w', '/w', DOCKER_IMAGE,
@@ -295,6 +323,7 @@ def run_one(code_path, tif_path, timeout=60, sandbox='sandbox-exec', site=False,
         with open(os.path.join(tmp, 'stderr.txt'), 'w+b') as err:
             p = subprocess.Popen(cmd, cwd=tmp, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=err,
                                  env=child_env)
+            PROCS.add(p)
             t0 = time.time()
             t_end, checked, why = t0 + wait, 0.0, None
             while p.poll() is None:
@@ -312,12 +341,14 @@ def run_one(code_path, tif_path, timeout=60, sandbox='sandbox-exec', site=False,
                     if folder_bytes(tmp) > DISK_LIMIT:
                         why = f'stopped: more than {DISK_LIMIT >> 20} MB written'
                 if why:
+                    PROCS.discard(p)
                     p.kill()
                     if name:
                         subprocess.run(['docker', 'kill', name], capture_output=True)
                     p.wait()
                     raise RuntimeError(why)
                 time.sleep(0.05)
+            PROCS.discard(p)
             if p.returncode != 0:
                 msg = last_error(err)
                 if p.returncode in (-9, -24, 137, 152) and not msg:
@@ -342,7 +373,11 @@ def check_one(code_path, name, meta, timeout, sandbox, site):
         msg = str(e) if isinstance(e, RuntimeError) else f'{type(e).__name__}: {e}'
         return {'status': 'timeout' if msg.startswith('timeout') else 'error', 'error': msg[:300],
                 'seconds': round(time.time() - t0, 2)}
-    r = {'seconds': round(time.time() - t0, 2), 'decode_s': round(float(head.get('decode_s') or 0), 3),
+    try:
+        decode_s = round(float(head.get('decode_s') or 0), 3)
+    except (TypeError, ValueError):
+        decode_s = None
+    r = {'seconds': round(time.time() - t0, 2), 'decode_s': decode_s,
          'got': [head['width'], head['height'], head['channels'], len(px)]}
     want = (meta['width'], meta['height'], meta['channels'])
     if tuple(r['got'][:3]) != want or len(px) != len(exp):
@@ -374,15 +409,19 @@ def grade(code_path, jobs=4, timeout=60, sandbox='sandbox-exec', site=False, ech
     if sandbox == 'docker':
         ensure_image()
     t0 = time.time()
+    ex = concurrent.futures.ThreadPoolExecutor(jobs)
     try:
-        with concurrent.futures.ThreadPoolExecutor(jobs) as ex:
-            futs = {name: ex.submit(check_one, code_path, name, meta, timeout, sandbox, site)
-                    for name, meta in manifest.items()}
-            files = {name: f.result() for name, f in futs.items()}
-    except KeyboardInterrupt:
+        futs = {name: ex.submit(check_one, code_path, name, meta, timeout, sandbox, site)
+                for name, meta in manifest.items()}
+        files = {name: f.result() for name, f in futs.items()}
+    except KeyboardInterrupt:           # stop now: nothing queued starts, everything running is killed
+        ex.shutdown(wait=False, cancel_futures=True)
+        for p in list(PROCS):
+            p.kill()
         if sandbox == 'docker':
             stop_containers()
         raise
+    ex.shutdown()
     if echo:
         for name, r in files.items():
             extra = r.get('error') or (f"{r['pixels_right']:.2%} of pixels right" if r['status'] == 'wrong' else '') \
@@ -408,38 +447,58 @@ def chat(base, key, body, timeout=900, progress=print):
     headers = {'Content-Type': 'application/json', 'User-Agent': 'fax-test/1'}
     if key:
         headers['Authorization'] = f'Bearer {key}'
-    req = urllib.request.Request(base.rstrip('/') + '/chat/completions', json.dumps({
-        **body, 'stream': True, 'stream_options': {'include_usage': True}}).encode(), headers)
+    payload = {'stream': True, 'stream_options': {'include_usage': True}, **body}
+    payload = {k: v for k, v in payload.items() if v is not None}      # --extra '{"stream_options": null}' drops it
+    req = urllib.request.Request(base.rstrip('/') + '/chat/completions', json.dumps(payload).encode(), headers)
     t0, first, usage, finish, done, shown = time.time(), None, {}, None, False, time.time()
     msg = {'content': '', 'reasoning': ''}
     with urllib.request.urlopen(req, timeout=timeout) as r:
-        for line in r:
-            line = line.decode('utf-8', 'replace').strip()
-            if not line.startswith('data:'):
-                continue
-            data = line[5:].strip()
-            if data == '[DONE]':
-                done = True
-                continue
-            try:
-                ev = json.loads(data)
-            except ValueError:
-                continue
-            if ev.get('error'):
-                raise RuntimeError(f"server error: {str(ev['error'])[:300]}")
-            usage = ev.get('usage') or usage
-            for ch in ev.get('choices') or []:
-                finish = ch.get('finish_reason') or finish
-                d = ch.get('delta') or {}
-                text, thought = d.get('content') or '', d.get('reasoning') or d.get('reasoning_content') or ''
-                if (text or thought) and first is None:
-                    first = time.time()
-                msg['content'] += text
-                msg['reasoning'] += thought
-            if time.time() - shown > 30:
-                shown = time.time()
-                progress(f"    ... {time.time() - t0:.0f} s, {len(msg['reasoning']):,} characters of reasoning, "
-                         f"{len(msg['content']):,} of answer")
+        if 'json' in (r.headers.get('Content-Type') or ''):            # a server that answered without streaming
+            whole = json.loads(r.read().decode('utf-8', 'replace'))
+            ch = ((whole.get('choices') or [{}])[0]) if isinstance(whole, dict) else {}
+            m = ch.get('message') or {}
+            msg = {'content': m.get('content') or '', 'reasoning': m.get('reasoning') or m.get('reasoning_content') or ''}
+            usage = whole.get('usage') or {}
+            finish, done, first = ch.get('finish_reason') or 'stop', True, time.time()
+            lines = []
+        else:
+            lines = r
+        try:
+            for line in lines:
+                line = line.decode('utf-8', 'replace').strip()
+                if not line.startswith('data:'):
+                    continue
+                data = line[5:].strip()
+                if data == '[DONE]':
+                    done = True
+                    continue
+                try:
+                    ev = json.loads(data)
+                except ValueError:
+                    continue
+                if not isinstance(ev, dict):
+                    continue
+                if ev.get('error'):
+                    raise RuntimeError(f"server error: {str(ev['error'])[:300]}")
+                usage = ev.get('usage') or usage
+                for ch in ev.get('choices') or []:
+                    if not isinstance(ch, dict):
+                        continue
+                    finish = ch.get('finish_reason') or finish
+                    d = ch.get('delta') or {}
+                    text, thought = d.get('content') or '', d.get('reasoning') or d.get('reasoning_content') or ''
+                    if (text or thought) and first is None:
+                        first = time.time()
+                    msg['content'] += text
+                    msg['reasoning'] += thought
+                if time.time() - shown > 30:
+                    shown = time.time()
+                    progress(f"    ... {time.time() - t0:.0f} s, {len(msg['reasoning']):,} characters of reasoning, "
+                             f"{len(msg['content']):,} of answer")
+        except (http.client.HTTPException, OSError) as e:    # the stream broke off: keep what came
+            finish = 'cut-off'
+            msg['error'] = f'{type(e).__name__}: {e}'[:200]
+
     t1 = time.time()
     n_out = usage.get('completion_tokens') or 0
     gen = t1 - (first or t1)
@@ -450,23 +509,28 @@ def chat(base, key, body, timeout=900, progress=print):
 
 
 def extract_code(text):
-    """The module from an answer: the longest fenced code block that defines decode(), Python-tagged or untagged
-    ones first. Fences may be indented, tagged in any case, ``` or ~~~, closed by a fence with other text after it
-    (```</think>), or wrap further fences (````markdown); a line with inline code (```decode()```) opens nothing; an
-    unclosed last block (an answer cut off by the token limit) counts up to the end. An answer that is only code
-    counts whole. None when there is none."""
-    lines = text.replace('\r\n', '\n').replace('\r', '\n').split('\n')
-    blocks, cur, lang, fence = [], None, '', ''
-    for ln in lines:
+    """The module from an answer: the last fenced code block that defines decode() (the answer's final version),
+    Python-tagged or untagged ones first. Reasoning the server left in the text (<think>...</think>) is dropped
+    first. Fences may be indented, tagged in any case, ``` or ~~~, closed by a fence with other text after it
+    (```</think>), or wrap further fences (````markdown); a fence indented deeper than the one that opened the block
+    (in a docstring, say) does not close it; a line with inline code (```decode()```) opens nothing; an unclosed last
+    block (an answer cut off by the token limit) counts up to the end. An answer that is only code counts whole.
+    None when there is none."""
+    text = text.replace('\r\n', '\n').replace('\r', '\n')
+    text = re.sub(r'<think>.*?</think>', '', text, flags=re.S)
+    if '</think>' in text:                                     # an opening tag the server already removed
+        text = text.rsplit('</think>', 1)[1]
+    blocks, cur, lang, fence, indent = [], None, '', '', 0
+    for ln in text.split('\n'):
         st = ln.strip()
         if cur is None:
             m = re.match(r'(`{3,}|~{3,})(.*)$', st)
             if m and not (m.group(1)[0] == '`' and '`' in m.group(2)):
-                fence, cur = m.group(1), []
+                fence, cur, indent = m.group(1), [], len(ln) - len(ln.lstrip())
                 lang = re.match(r'\s*([\w+.-]*)', m.group(2)).group(1).lower()
             continue
         m = re.match(re.escape(fence[0]) + '{%d,}(.*)$' % len(fence), st)
-        if m and not re.match(r'\s*\w', m.group(1)):
+        if m and not re.match(r'\s*\w', m.group(1)) and len(ln) - len(ln.lstrip()) <= indent:
             blocks.append((lang, '\n'.join(cur)))
             cur = None
         else:
@@ -486,7 +550,7 @@ def extract_code(text):
         [b for t, b in found if defines(b)]
     if not good and not blocks and re.search(r'^def decode\s*\(', text, re.M):
         good = [text]
-    return textwrap.dedent(max(good, key=len)) if good else None
+    return textwrap.dedent(good[-1]) if good else None
 
 
 def feedback_text(g, manifest):
@@ -515,25 +579,35 @@ def feedback_text(g, manifest):
     return '\n'.join(lines)
 
 
-def ask_and_grade(base, key, body, *, timeout, jobs, sandbox, echo):
+def ask(base, key, body, *, timeout, echo):
+    """One request: the turn's record with the answer and its module, not yet graded."""
     try:
-        msg, finish, m = chat(base, key, body, timeout=timeout)
+        msg, finish, m = chat(base, key, body, timeout=timeout, progress=echo)
     except urllib.error.HTTPError as e:
         return {'error': f'HTTP {e.code} {e.read().decode(errors="replace")[:300]}'}
-    except (urllib.error.URLError, TimeoutError, OSError, ValueError, RuntimeError) as e:
+    except (urllib.error.URLError, http.client.HTTPException, OSError, ValueError, RuntimeError) as e:
         return {'error': f'{type(e).__name__}: {e}'}
     turn = {'max_tokens': body.get('max_tokens'), 'finish': finish, 'timing': m, 'answer': msg['content'],
             'reasoning': msg['reasoning'], 'code': extract_code(msg['content']), 'grade': None}
+    if msg.get('error'):
+        turn['stream_error'] = msg['error']
     echo(f"  {m['seconds']:.0f} s, {m['completion_tokens']} tokens out, finish {finish}; "
          f"answer {len(msg['content'])} characters, reasoning {len(msg['reasoning'])}")
     if finish == 'cut-off':
-        echo('  the stream ended without a finish reason: the answer may be incomplete')
+        echo('  the stream ended without a finish reason: the answer may be incomplete'
+             + (f" ({msg['error']})" if msg.get('error') else ''))
     if finish == 'length' and turn['code'] is None:
         echo('  the token limit ended the answer before any code (raise --max-tokens for a reasoning model)')
     if turn['code'] is None:
         echo('  no module with decode() in the answer: 0 files')
-        return turn
-    turn['code_lines'] = turn['code'].count('\n') + 1
+    else:
+        turn['code_lines'] = turn['code'].count('\n') + 1
+    return turn
+
+
+def grade_turn(turn, *, jobs, sandbox, echo):
+    if not turn.get('code'):
+        return
     with tempfile.NamedTemporaryFile('w', suffix='.py', delete=False, encoding='utf-8') as f:
         f.write(turn['code'])
     try:
@@ -541,7 +615,6 @@ def ask_and_grade(base, key, body, *, timeout, jobs, sandbox, echo):
     finally:
         os.unlink(f.name)
     echo(f"  {turn['code_lines']} lines: {summary_line(turn['grade']['summary'])}")
-    return turn
 
 
 def run_test(base, key, model, *, max_tokens=32768, extra=None, turns=0, context=None, timeout=900, jobs=4,
@@ -573,10 +646,16 @@ def run_test(base, key, model, *, max_tokens=32768, extra=None, turns=0, context
                 break
         body = {'model': model, 'messages': messages, **({'max_tokens': budget} if budget > 0 else {}), **(extra or {})}
         echo(f'  turn {n + 1} of {turns + 1}:')
-        turn = ask_and_grade(base, key, body, timeout=timeout, jobs=jobs, sandbox=sandbox, echo=echo)
+        turn = ask(base, key, body, timeout=timeout, echo=echo)
         (rec.update(turn) if n == 0 else rec['feedback'].append(turn))
+        if n == 0:
+            turn = rec
         if save:
-            save(rec)
+            save(rec)                       # the answer is kept before its grading can be interrupted
+        if 'error' not in turn:
+            grade_turn(turn, jobs=jobs, sandbox=sandbox, echo=echo)
+            if save:
+                save(rec)
         if 'error' in turn:
             echo('  ' + turn['error'])
             break
@@ -612,10 +691,10 @@ STRIPS_ONLY = {'raw_gray8', 'raw_rgb8', 'raw_rgb8_strips_be', 'deflate_gray8', '
                'deflate_old_code_rgb8'}   # what check/strips_only.py handles: 8-bit gray/RGB strips, none/Deflate
 PROBE_BITS = ('read this folder', 'connect', 'child process', 'write outside its folder', 'start a program',
               'read /etc/hosts', 'import an installed package', "read the grader's environment",
-              'see file details in this folder')
-# what a module may do inside each sandbox: inside a throwaway container, processes and the container's own /etc
-# reach nothing of yours (bits 4, 16, 32); under sandbox-exec, nothing
-PROBE_ALLOWED = {'sandbox-exec': 0, 'docker': 4 | 16 | 32}
+              'see file details in this folder', 'load ctypes')
+# what a module may do inside each sandbox: inside a throwaway container, processes, the container's own /etc and
+# ctypes reach nothing of yours (bits 4, 16, 32, 512); under sandbox-exec, nothing
+PROBE_ALLOWED = {'sandbox-exec': 0, 'docker': 4 | 16 | 32 | 512}
 
 
 def site_package():
@@ -689,7 +768,8 @@ def selftest(sandbox, jobs=4):
         ok &= good
         done = ', '.join(f"{w} {'yes' if flags & (1 << i) else 'no'}" for i, w in enumerate(PROBE_BITS))
         print(f"{'ok ' if good else 'BAD'} escape_probe.py          {done}"
-              + (' (yes is allowed inside the container for child process, start a program, read /etc/hosts)'
+              + (' (yes is allowed inside the container for child process, start a program, read /etc/hosts, '
+                 'load ctypes)'
                  if sandbox == 'docker' else ''))
     print(f"selftest {'passed' if ok else 'FAILED'} (sandbox: {sandbox})")
     return ok
@@ -710,7 +790,7 @@ def table(paths):
         cats = best['summary']['by_category'] if best else {}
         print('| ' + ' | '.join([r['model'], r['started'][:16].replace('T', ' '), str(len(turns)),
                                  str(r.get('final', {}).get('tokens_out', '')),
-                                 ' → '.join(map(str, r.get('final', {}).get('passed_by_turn', []))) or r.get('error', '')[:40],
+                                 ' -> '.join(map(str, r.get('final', {}).get('passed_by_turn', []))) or r.get('error', '')[:40],
                                  f"{best['summary']['passed'] if best else 0}/40",
                                  f"{max((g['summary']['ccitt_passed'] for g in grades), default=0)}/19"] +
                                 [f'{cats[c][0]}/{cats[c][1]}' if c in cats else '-' for c in CATEGORIES]) + ' |')

@@ -26,7 +26,9 @@ Then, in another terminal, with any model you have pulled:
 git clone https://github.com/blixild-jacek/fax-test && cd fax-test && python3 faxtest.py run --base-url http://localhost:11434/v1 --model qwen3:32b --max-tokens 60000
 ```
 
-That is the whole setup: Python 3.10 or newer and its standard library, nothing to install. On macOS the sandbox is
+That is the whole setup: Python 3.10 or newer and its standard library, nothing else to install. (On macOS,
+`/usr/bin/python3` is Apple's 3.9, which the tool refuses; install Python from [python.org](https://www.python.org/downloads/),
+Homebrew or uv.) On macOS the sandbox is
 built in; on Linux and Windows the grader needs [Docker](https://docs.docker.com/get-docker/) running (see "The
 sandbox" below). In Windows PowerShell, run the three commands one at a time (`git clone ...`, `cd fax-test`,
 `python faxtest.py run ...`). While the model writes, the run prints how much it has written every 30 seconds; a
@@ -45,7 +47,8 @@ Any server that speaks the OpenAI chat API works. Point `--base-url` at it and n
 `OPENAI_BASE_URL` in the environment can stand in for `--base-url`. The key, if the server needs one, is read from
 `OPENAI_API_KEY` (or the variable `--api-key-env` names). It is sent only to that server: the model's code never sees
 your environment, and the key is not written to the results. An API that rejects the `max_tokens` field wants
-`--max-tokens 0` and its own field in `--extra`.
+`--max-tokens 0` and its own field in `--extra`; one that rejects `stream_options` wants
+`--extra '{"stream_options": null}'`. A server that answers without streaming works too.
 
 A run prints each file's result and ends with a line like this one (Qwen3.8-27B with reasoning off and `--turns 1`,
 from a fresh clone, 25 November 2026):
@@ -83,7 +86,7 @@ To see what a decoder returned, file by file beside the original (needs Pillow):
 python3 tools/gallery.py results/RUN.json [another.json ...]
 ```
 
-It writes `results/gallery.png`: one row per test file, the original first, then each run's best module, every tile
+It writes `results/gallery.png`: one row per chosen test file (10 by default, `--files` picks them), the original first, then each run's best module, every tile
 marked exact, the share of pixels right, a short output or the error.
 
 ## What the test asks and checks
@@ -113,8 +116,9 @@ and each was read back with libtiff and matched the drawing before it went in.
 [tools/make_corpus.py](tools/make_corpus.py) builds them again, byte for byte with Pillow 12.3 (libtiff 4.7.1) and
 tiffcp 4.7.2; it needs Pillow, numpy and tiffcp, and the test itself does not.
 
-The module runs once per file, in a new process, with limits of 60 seconds, 1.5 GB of memory (measured by the
-grader from outside the sandbox) and 256 MB written in all, 64 MB per file. A file counts only if every sample matches; the results file keeps, for each other file, the error, the wrong
+The module runs once per file, in a new process, with limits of 60 seconds, 1 GB of memory (measured by the grader
+from outside the sandbox on macOS, set by Docker in a container) and 256 MB written in all (counted by the system on
+macOS, the folder's size in Docker), 64 MB per file. A file counts only if every sample matches; the results file keeps, for each other file, the error, the wrong
 size, or the share of pixels that were right.
 
 ## The sandbox
@@ -125,7 +129,8 @@ The code a model writes runs on your machine, so the grader confines it:
   The module may start only the Python interpreter, read only the system's libraries, Python's standard library and
   its native libraries and its own temporary folder, see file details only along those paths, and write only to
   that folder: no network, no other program or child process, no system services or system information, no other
-  process's details, none of your files and no installed third-party package. It gets only a `PATH`, nothing else of
+  process's details, none of your files or their names, no `ctypes` (the prompt forbids it, and it reaches past
+  such rules) and no installed third-party package. It gets only a `PATH`, nothing else of
   your environment. The code runs on your Python, while the prompt asks for 3.12; with an older Python the run says
   so. Checked with conda's Python 3.13 and Homebrew's Python 3.15 on macOS 26.
 - **Linux and Windows:** Docker: each file in a new `python:3.12-alpine` container with no network, a read-only file
@@ -140,15 +145,17 @@ Pillow, if Pillow is installed for this Python, must pass all 40; the same with 
 blank answer none; a 40-line partial decoder exactly its 6 files). Then a module tries, from inside the sandbox, to
 read a file in this folder or see its details, connect to a listener the selftest opens on your machine, start a
 child process or another program, write outside its folder, read `/etc/hosts`, import an installed package and read
-the grader's own environment; under macOS every attempt must fail. Inside a Docker container, processes and the container's own `/etc/hosts` are allowed, since
-they reach nothing of yours, and your files are not there to read.
+the grader's own environment and load `ctypes`; under macOS every attempt must fail. Inside a Docker container,
+processes, the container's own `/etc/hosts` and `ctypes` are allowed, since they reach nothing of yours, and your
+files are not there to read.
 
 ## Our results
 
 Measured on 25 November 2026 through our own API, the models running on our graphics cards, each at the sampling
 its model card recommends (Arete-27B at the server's default). One to five runs per setting, so these show how the
 models behave, not a score. Most ran on this test before it was packaged here, with the same prompt, files and
-grading; the last three reasoning-off runs ran from this repository.
+scoring; the sandbox and the reading of answers were tightened afterwards. The last three reasoning-off runs ran from
+this repository.
 
 | Model, setting | Requests (all turns) | Answers with code | Best answer, files right | CCITT files right |
 | --- | --- | --- | --- | --- |
