@@ -1,0 +1,576 @@
+{
+ "made": "tools/make_corpus.py",
+ "libtiff": "4.7.1",
+ "files": {
+  "raw_bilevel_miniswhite": {
+   "category": "uncompressed",
+   "width": 1728,
+   "height": 260,
+   "channels": 1,
+   "sha256": "d4dc4ea2f96d0ea3409985a475b05dc7e841f6cd56dd66b75bb298a6db15075d",
+   "bytes": 56406,
+   "tiff_sha256": "e9cc4275bdb412e81f8e0e376659846dd2d3703afe6027a97c3333f1b6aba2ec",
+   "made_with": [],
+   "tags": "II, 1728x260, BitsPerSample 1, SamplesPerPixel 1, Compression 1, PhotometricInterpretation 0, PlanarConfiguration 1, RowsPerStrip 37 (8 strips)"
+  },
+  "raw_bilevel_minisblack_be": {
+   "category": "uncompressed",
+   "width": 37,
+   "height": 23,
+   "channels": 1,
+   "sha256": "78bf4917116f70d696c004b2b19ab9f6ee2843e1ce0d90ccbca66428ec2138c0",
+   "bytes": 314,
+   "tiff_sha256": "4ce0808a881946fa9e6581b70e90f6a42149128e4bd1f2dfc855f48f739314ee",
+   "made_with": [
+    "-B"
+   ],
+   "tags": "MM, 37x23, BitsPerSample 1, SamplesPerPixel 1, Compression 1, PhotometricInterpretation 1, PlanarConfiguration 1, RowsPerStrip 23 (1 strips)"
+  },
+  "raw_gray8": {
+   "category": "uncompressed",
+   "width": 157,
+   "height": 103,
+   "channels": 1,
+   "sha256": "fab4b9d296b3a61e39466f7d03d5ff29af2cb89bb0432d67c97025b4c77591ee",
+   "bytes": 16378,
+   "tiff_sha256": "403c7127138a9ead68ac5d5b08ee256f00329215e69665e021c6dbede09a38c6",
+   "made_with": [],
+   "tags": "II, 157x103, BitsPerSample 8, SamplesPerPixel 1, Compression 1, PhotometricInterpretation 1, PlanarConfiguration 1, RowsPerStrip 52 (2 strips)"
+  },
+  "raw_gray8_tiled": {
+   "category": "uncompressed",
+   "width": 157,
+   "height": 103,
+   "channels": 1,
+   "sha256": "fab4b9d296b3a61e39466f7d03d5ff29af2cb89bb0432d67c97025b4c77591ee",
+   "bytes": 20810,
+   "tiff_sha256": "b927ec5b70ec88934844e37ceac4ebeb4694799cc00d605376658f0e74c2a48f",
+   "made_with": [
+    "-t",
+    "-w",
+    "32",
+    "-l",
+    "32"
+   ],
+   "tags": "II, 157x103, BitsPerSample 8, SamplesPerPixel 1, Compression 1, PhotometricInterpretation 1, PlanarConfiguration 1, tiles 32x32 (20 of them)"
+  },
+  "raw_rgb8": {
+   "category": "uncompressed",
+   "width": 157,
+   "height": 103,
+   "channels": 3,
+   "sha256": "7c7e6af75eddc92a5e6f0d3d5515901ae03ad4b921a665527edfc61a5c7f997f",
+   "bytes": 48760,
+   "tiff_sha256": "fe9ce8b35ca53112572125f932a1e9606bca9dca9ab51b194f85ccaa0eb65d38",
+   "made_with": [],
+   "tags": "II, 157x103, BitsPerSample 8,8,8, SamplesPerPixel 3, Compression 1, PhotometricInterpretation 2, PlanarConfiguration 1, RowsPerStrip 17 (7 strips)"
+  },
+  "raw_rgb8_strips_be": {
+   "category": "uncompressed",
+   "width": 157,
+   "height": 103,
+   "channels": 3,
+   "sha256": "7c7e6af75eddc92a5e6f0d3d5515901ae03ad4b921a665527edfc61a5c7f997f",
+   "bytes": 48808,
+   "tiff_sha256": "3baf67e0646dde507591b7745779a7c74e581e9d8c0093dbb7a95e8b3a66bb97",
+   "made_with": [
+    "-B",
+    "-r",
+    "7"
+   ],
+   "tags": "MM, 157x103, BitsPerSample 8,8,8, SamplesPerPixel 3, Compression 1, PhotometricInterpretation 2, PlanarConfiguration 1, RowsPerStrip 7 (15 strips)"
+  },
+  "raw_rgb8_planar": {
+   "category": "uncompressed",
+   "width": 157,
+   "height": 103,
+   "channels": 3,
+   "sha256": "7c7e6af75eddc92a5e6f0d3d5515901ae03ad4b921a665527edfc61a5c7f997f",
+   "bytes": 48844,
+   "tiff_sha256": "f87666408de260d6a7caa44dce81dcdb761d76cd94cf0e076e8b6e7127bf84a3",
+   "made_with": [
+    "-p",
+    "separate"
+   ],
+   "tags": "II, 157x103, BitsPerSample 8,8,8, SamplesPerPixel 3, Compression 1, PhotometricInterpretation 2, PlanarConfiguration 2, RowsPerStrip 17 (21 strips)"
+  },
+  "raw_pal8": {
+   "category": "uncompressed",
+   "width": 157,
+   "height": 103,
+   "channels": 3,
+   "sha256": "ed6be5a7e8d8945ffb97ee55e38988ef37c3dfd4eb2352dbfafc6043cfb5425c",
+   "bytes": 17926,
+   "tiff_sha256": "16d3101d9523e72d05e763fa7ec829bde9f43a294600b6302a6f19670a70900f",
+   "made_with": [],
+   "tags": "II, 157x103, BitsPerSample 8, SamplesPerPixel 1, Compression 1, PhotometricInterpretation 3, PlanarConfiguration 1, RowsPerStrip 52 (2 strips), ColorMap of 256"
+  },
+  "raw_pal4": {
+   "category": "uncompressed",
+   "width": 157,
+   "height": 103,
+   "channels": 3,
+   "sha256": "23d30cfbcd9b33aa795959bf962c6a361ec65e41fa9b92ecce9600a836cf6a41",
+   "bytes": 8444,
+   "tiff_sha256": "4ed20ae3d3cc49694a5c7593b3736415560ca3d5bdffbe04c4348ba185dd260b",
+   "made_with": [],
+   "tags": "II, 157x103, BitsPerSample 4, SamplesPerPixel 1, Compression 1, PhotometricInterpretation 3, PlanarConfiguration 1, RowsPerStrip 103 (1 strips), ColorMap of 16"
+  },
+  "packbits_bilevel": {
+   "category": "packbits",
+   "width": 1728,
+   "height": 260,
+   "channels": 1,
+   "sha256": "d4dc4ea2f96d0ea3409985a475b05dc7e841f6cd56dd66b75bb298a6db15075d",
+   "bytes": 15052,
+   "tiff_sha256": "446f1f9f08ad3665ee7fbee7145f4ce75b4e1f74a54ef2321317572144ec9a47",
+   "made_with": [
+    "-c",
+    "packbits"
+   ],
+   "tags": "II, 1728x260, BitsPerSample 1, SamplesPerPixel 1, Compression 32773, PhotometricInterpretation 0, PlanarConfiguration 1, RowsPerStrip 37 (8 strips)"
+  },
+  "packbits_gray8": {
+   "category": "packbits",
+   "width": 157,
+   "height": 103,
+   "channels": 1,
+   "sha256": "fab4b9d296b3a61e39466f7d03d5ff29af2cb89bb0432d67c97025b4c77591ee",
+   "bytes": 14276,
+   "tiff_sha256": "fc2363a0131a22140ff70e6fc3bfabda644c8fc37134ce2c7b896f3fd592c115",
+   "made_with": [
+    "-c",
+    "packbits"
+   ],
+   "tags": "II, 157x103, BitsPerSample 8, SamplesPerPixel 1, Compression 32773, PhotometricInterpretation 1, PlanarConfiguration 1, RowsPerStrip 52 (2 strips)"
+  },
+  "packbits_rgb8_be": {
+   "category": "packbits",
+   "width": 157,
+   "height": 103,
+   "channels": 3,
+   "sha256": "7c7e6af75eddc92a5e6f0d3d5515901ae03ad4b921a665527edfc61a5c7f997f",
+   "bytes": 49186,
+   "tiff_sha256": "82046c32fbeb0c6ab6fa9bd8a6deababc95cc98c04c875c4271eb620d1c51ab4",
+   "made_with": [
+    "-c",
+    "packbits",
+    "-B"
+   ],
+   "tags": "MM, 157x103, BitsPerSample 8,8,8, SamplesPerPixel 3, Compression 32773, PhotometricInterpretation 2, PlanarConfiguration 1, RowsPerStrip 17 (7 strips)"
+  },
+  "lzw_bilevel": {
+   "category": "lzw",
+   "width": 1728,
+   "height": 260,
+   "channels": 1,
+   "sha256": "d4dc4ea2f96d0ea3409985a475b05dc7e841f6cd56dd66b75bb298a6db15075d",
+   "bytes": 13240,
+   "tiff_sha256": "e596dc9df674c2237c6bf2cb0f45fcd3ae8a1b45651f6bee7de08c7204b577b8",
+   "made_with": [
+    "-c",
+    "lzw"
+   ],
+   "tags": "II, 1728x260, BitsPerSample 1, SamplesPerPixel 1, Compression 5, PhotometricInterpretation 0, PlanarConfiguration 1, RowsPerStrip 37 (8 strips)"
+  },
+  "lzw_gray8": {
+   "category": "lzw",
+   "width": 157,
+   "height": 103,
+   "channels": 1,
+   "sha256": "fab4b9d296b3a61e39466f7d03d5ff29af2cb89bb0432d67c97025b4c77591ee",
+   "bytes": 16168,
+   "tiff_sha256": "4995806326c164ef23b1269efccfd7e83354b8042b27e2e16b5f034a3f02f5bf",
+   "made_with": [
+    "-c",
+    "lzw"
+   ],
+   "tags": "II, 157x103, BitsPerSample 8, SamplesPerPixel 1, Compression 5, PhotometricInterpretation 1, PlanarConfiguration 1, RowsPerStrip 52 (2 strips)"
+  },
+  "lzw_rgb8": {
+   "category": "lzw",
+   "width": 157,
+   "height": 103,
+   "channels": 3,
+   "sha256": "7c7e6af75eddc92a5e6f0d3d5515901ae03ad4b921a665527edfc61a5c7f997f",
+   "bytes": 51568,
+   "tiff_sha256": "de78aa129656505d47284ae15ee147cb795d9915330ec53f5aa1009db79a5052",
+   "made_with": [
+    "-c",
+    "lzw"
+   ],
+   "tags": "II, 157x103, BitsPerSample 8,8,8, SamplesPerPixel 3, Compression 5, PhotometricInterpretation 2, PlanarConfiguration 1, RowsPerStrip 17 (7 strips)"
+  },
+  "lzw_rgb8_predictor": {
+   "category": "lzw",
+   "width": 157,
+   "height": 103,
+   "channels": 3,
+   "sha256": "7c7e6af75eddc92a5e6f0d3d5515901ae03ad4b921a665527edfc61a5c7f997f",
+   "bytes": 25366,
+   "tiff_sha256": "78b0cd50c30d914d415bddb1d1d5a9397de4acac5c97aedba7de707d11c1a9d5",
+   "made_with": [
+    "-c",
+    "lzw:2"
+   ],
+   "tags": "II, 157x103, BitsPerSample 8,8,8, SamplesPerPixel 3, Compression 5, PhotometricInterpretation 2, PlanarConfiguration 1, RowsPerStrip 17 (7 strips), Predictor 2"
+  },
+  "lzw_gray8_predictor_strips_be": {
+   "category": "lzw",
+   "width": 157,
+   "height": 103,
+   "channels": 1,
+   "sha256": "fab4b9d296b3a61e39466f7d03d5ff29af2cb89bb0432d67c97025b4c77591ee",
+   "bytes": 13338,
+   "tiff_sha256": "11a595aa565738d040fb61ca8b4d137dc30079177834f96b99b076a1a141bbdb",
+   "made_with": [
+    "-c",
+    "lzw:2",
+    "-r",
+    "16",
+    "-B"
+   ],
+   "tags": "MM, 157x103, BitsPerSample 8, SamplesPerPixel 1, Compression 5, PhotometricInterpretation 1, PlanarConfiguration 1, RowsPerStrip 16 (7 strips), Predictor 2"
+  },
+  "lzw_pal8": {
+   "category": "lzw",
+   "width": 157,
+   "height": 103,
+   "channels": 3,
+   "sha256": "ed6be5a7e8d8945ffb97ee55e38988ef37c3dfd4eb2352dbfafc6043cfb5425c",
+   "bytes": 8840,
+   "tiff_sha256": "4941ca892bdb828e78e0a8902c446c68fb7d4435f2fe544eca47954f134093df",
+   "made_with": [
+    "-c",
+    "lzw"
+   ],
+   "tags": "II, 157x103, BitsPerSample 8, SamplesPerPixel 1, Compression 5, PhotometricInterpretation 3, PlanarConfiguration 1, RowsPerStrip 52 (2 strips), ColorMap of 256"
+  },
+  "deflate_gray8": {
+   "category": "deflate",
+   "width": 157,
+   "height": 103,
+   "channels": 1,
+   "sha256": "fab4b9d296b3a61e39466f7d03d5ff29af2cb89bb0432d67c97025b4c77591ee",
+   "bytes": 13516,
+   "tiff_sha256": "87b0d3c698c636cb166e110376d6ff679cb835e278188577f1ce8fb996904acc",
+   "made_with": [
+    "-c",
+    "zip"
+   ],
+   "tags": "II, 157x103, BitsPerSample 8, SamplesPerPixel 1, Compression 8, PhotometricInterpretation 1, PlanarConfiguration 1, RowsPerStrip 52 (2 strips)"
+  },
+  "deflate_rgb8_predictor": {
+   "category": "deflate",
+   "width": 157,
+   "height": 103,
+   "channels": 3,
+   "sha256": "7c7e6af75eddc92a5e6f0d3d5515901ae03ad4b921a665527edfc61a5c7f997f",
+   "bytes": 22284,
+   "tiff_sha256": "43bb054a8e54b0a3d875252f666b8fbd148620b182cbd89af79b374c0002f6d5",
+   "made_with": [
+    "-c",
+    "zip:2"
+   ],
+   "tags": "II, 157x103, BitsPerSample 8,8,8, SamplesPerPixel 3, Compression 8, PhotometricInterpretation 2, PlanarConfiguration 1, RowsPerStrip 17 (7 strips), Predictor 2"
+  },
+  "deflate_old_code_rgb8": {
+   "category": "deflate",
+   "width": 157,
+   "height": 103,
+   "channels": 3,
+   "sha256": "7c7e6af75eddc92a5e6f0d3d5515901ae03ad4b921a665527edfc61a5c7f997f",
+   "bytes": 39208,
+   "tiff_sha256": "737ae986dbcdbcb51dd70bdac8fa62fe3ccadf3ba47783cf3807210e806c2e82",
+   "made_with": [
+    "-c",
+    "zip",
+    "-r",
+    "20",
+    "Compression tag set to 32946"
+   ],
+   "tags": "II, 157x103, BitsPerSample 8,8,8, SamplesPerPixel 3, Compression 32946, PhotometricInterpretation 2, PlanarConfiguration 1, RowsPerStrip 20 (6 strips)"
+  },
+  "ccitt_rle_doc": {
+   "category": "ccitt_rle",
+   "width": 1728,
+   "height": 260,
+   "channels": 1,
+   "sha256": "d4dc4ea2f96d0ea3409985a475b05dc7e841f6cd56dd66b75bb298a6db15075d",
+   "bytes": 25362,
+   "tiff_sha256": "cdf57ad0fef18c263f1381356b97303560e4b9c202e22fea3fcf80c29ca5485c",
+   "made_with": [
+    "pillow",
+    "tiff_ccitt"
+   ],
+   "tags": "II, 1728x260, BitsPerSample 1, SamplesPerPixel 1, Compression 2, PhotometricInterpretation 1, PlanarConfiguration 1, RowsPerStrip 260 (1 strips)"
+  },
+  "ccitt_rle_small": {
+   "category": "ccitt_rle",
+   "width": 37,
+   "height": 23,
+   "channels": 1,
+   "sha256": "78bf4917116f70d696c004b2b19ab9f6ee2843e1ce0d90ccbca66428ec2138c0",
+   "bytes": 384,
+   "tiff_sha256": "a002b959294d2e6cb96e7922bf19eba8cb18a9f14a1b17682d5aceb6af8abf2d",
+   "made_with": [
+    "pillow",
+    "tiff_ccitt"
+   ],
+   "tags": "II, 37x23, BitsPerSample 1, SamplesPerPixel 1, Compression 2, PhotometricInterpretation 1, PlanarConfiguration 1, RowsPerStrip 23 (1 strips)"
+  },
+  "ccitt_rle_wide_lsb2msb": {
+   "category": "ccitt_rle",
+   "width": 3000,
+   "height": 48,
+   "channels": 1,
+   "sha256": "95b2da08f28f58f1973cf75f53366cb0b92c132cc474608b5b3d0ec564d232b5",
+   "bytes": 4874,
+   "tiff_sha256": "75f912db08bfdcc61330553a3271864e115fff50e73935f7ebfe3db82ec0558f",
+   "made_with": [
+    "pillow",
+    "tiff_ccitt",
+    "-f",
+    "lsb2msb"
+   ],
+   "tags": "II, 3000x48, BitsPerSample 1, SamplesPerPixel 1, Compression 2, PhotometricInterpretation 1, PlanarConfiguration 1, RowsPerStrip 48 (1 strips), FillOrder 2"
+  },
+  "g3_1d_doc": {
+   "category": "g3_1d",
+   "width": 1728,
+   "height": 260,
+   "channels": 1,
+   "sha256": "d4dc4ea2f96d0ea3409985a475b05dc7e841f6cd56dd66b75bb298a6db15075d",
+   "bytes": 24034,
+   "tiff_sha256": "c6f11c73a96b58fbf49ff436becfed28c31389b1c914e0532463b9e34d79f53a",
+   "made_with": [
+    "-c",
+    "g3:1d"
+   ],
+   "tags": "II, 1728x260, BitsPerSample 1, SamplesPerPixel 1, Compression 3, PhotometricInterpretation 0, PlanarConfiguration 1, RowsPerStrip 37 (8 strips), T4Options 0"
+  },
+  "g3_1d_small": {
+   "category": "g3_1d",
+   "width": 37,
+   "height": 23,
+   "channels": 1,
+   "sha256": "78bf4917116f70d696c004b2b19ab9f6ee2843e1ce0d90ccbca66428ec2138c0",
+   "bytes": 436,
+   "tiff_sha256": "9c1c1022d25923f14671b2bdadf41b1bef462d4d5050f5a54f21d0a18ec1bc81",
+   "made_with": [
+    "-c",
+    "g3:1d"
+   ],
+   "tags": "II, 37x23, BitsPerSample 1, SamplesPerPixel 1, Compression 3, PhotometricInterpretation 0, PlanarConfiguration 1, RowsPerStrip 23 (1 strips), T4Options 0"
+  },
+  "g3_1d_wide": {
+   "category": "g3_1d",
+   "width": 3000,
+   "height": 48,
+   "channels": 1,
+   "sha256": "95b2da08f28f58f1973cf75f53366cb0b92c132cc474608b5b3d0ec564d232b5",
+   "bytes": 3638,
+   "tiff_sha256": "17c23329e74ca486a442665cc2924a997a6601a606fd26a3aa328c98b8e0a29f",
+   "made_with": [
+    "-c",
+    "g3:1d"
+   ],
+   "tags": "II, 3000x48, BitsPerSample 1, SamplesPerPixel 1, Compression 3, PhotometricInterpretation 0, PlanarConfiguration 1, RowsPerStrip 21 (3 strips), T4Options 0"
+  },
+  "g3_1d_fill_doc": {
+   "category": "g3_1d",
+   "width": 1728,
+   "height": 260,
+   "channels": 1,
+   "sha256": "d4dc4ea2f96d0ea3409985a475b05dc7e841f6cd56dd66b75bb298a6db15075d",
+   "bytes": 24152,
+   "tiff_sha256": "9f0b9ccbe70e816932427663f3171d270ef57e5b992c5a82229c3fe6c862decb",
+   "made_with": [
+    "-c",
+    "g3:1d:fill"
+   ],
+   "tags": "II, 1728x260, BitsPerSample 1, SamplesPerPixel 1, Compression 3, PhotometricInterpretation 0, PlanarConfiguration 1, RowsPerStrip 37 (8 strips), T4Options 4"
+  },
+  "g3_1d_lsb2msb_doc": {
+   "category": "g3_1d",
+   "width": 1728,
+   "height": 260,
+   "channels": 1,
+   "sha256": "d4dc4ea2f96d0ea3409985a475b05dc7e841f6cd56dd66b75bb298a6db15075d",
+   "bytes": 24046,
+   "tiff_sha256": "0e53194a5aad361b354460313d0f2b7f1ff95977cd776fe20e8b1f6237bdc42e",
+   "made_with": [
+    "-c",
+    "g3:1d",
+    "-f",
+    "lsb2msb"
+   ],
+   "tags": "II, 1728x260, BitsPerSample 1, SamplesPerPixel 1, Compression 3, PhotometricInterpretation 0, PlanarConfiguration 1, RowsPerStrip 37 (8 strips), FillOrder 2, T4Options 0"
+  },
+  "g3_2d_doc": {
+   "category": "g3_2d",
+   "width": 1728,
+   "height": 260,
+   "channels": 1,
+   "sha256": "d4dc4ea2f96d0ea3409985a475b05dc7e841f6cd56dd66b75bb298a6db15075d",
+   "bytes": 22934,
+   "tiff_sha256": "7e0ae29db928c6a0e86a0a9fb78808149f1bbb71a91a3e5969b06f4483e6bb11",
+   "made_with": [
+    "-c",
+    "g3:2d"
+   ],
+   "tags": "II, 1728x260, BitsPerSample 1, SamplesPerPixel 1, Compression 3, PhotometricInterpretation 0, PlanarConfiguration 1, RowsPerStrip 37 (8 strips), T4Options 1"
+  },
+  "g3_2d_small": {
+   "category": "g3_2d",
+   "width": 37,
+   "height": 23,
+   "channels": 1,
+   "sha256": "78bf4917116f70d696c004b2b19ab9f6ee2843e1ce0d90ccbca66428ec2138c0",
+   "bytes": 450,
+   "tiff_sha256": "e536be150d6c5b1abefd129ef052e7973ded93cda73138398287bf223cd2cf78",
+   "made_with": [
+    "-c",
+    "g3:2d"
+   ],
+   "tags": "II, 37x23, BitsPerSample 1, SamplesPerPixel 1, Compression 3, PhotometricInterpretation 0, PlanarConfiguration 1, RowsPerStrip 23 (1 strips), T4Options 1"
+  },
+  "g3_2d_wide": {
+   "category": "g3_2d",
+   "width": 3000,
+   "height": 48,
+   "channels": 1,
+   "sha256": "95b2da08f28f58f1973cf75f53366cb0b92c132cc474608b5b3d0ec564d232b5",
+   "bytes": 2992,
+   "tiff_sha256": "dbe319253c90e37c74e7438688baa02d262f93234ccdc3231b0d68e88d9431bd",
+   "made_with": [
+    "-c",
+    "g3:2d"
+   ],
+   "tags": "II, 3000x48, BitsPerSample 1, SamplesPerPixel 1, Compression 3, PhotometricInterpretation 0, PlanarConfiguration 1, RowsPerStrip 21 (3 strips), T4Options 1"
+  },
+  "g3_2d_fill_strips_doc": {
+   "category": "g3_2d",
+   "width": 1728,
+   "height": 260,
+   "channels": 1,
+   "sha256": "d4dc4ea2f96d0ea3409985a475b05dc7e841f6cd56dd66b75bb298a6db15075d",
+   "bytes": 22926,
+   "tiff_sha256": "04c4c2904e042d407492692599f17d15aa63c32104769c4e3a56568876a73aca",
+   "made_with": [
+    "-c",
+    "g3:2d:fill",
+    "-r",
+    "40"
+   ],
+   "tags": "II, 1728x260, BitsPerSample 1, SamplesPerPixel 1, Compression 3, PhotometricInterpretation 0, PlanarConfiguration 1, RowsPerStrip 40 (7 strips), T4Options 5"
+  },
+  "g4_doc": {
+   "category": "g4",
+   "width": 1728,
+   "height": 260,
+   "channels": 1,
+   "sha256": "d4dc4ea2f96d0ea3409985a475b05dc7e841f6cd56dd66b75bb298a6db15075d",
+   "bytes": 21742,
+   "tiff_sha256": "0b56a1dbe3ca6ed9491cfea82e7443152e64592bc07eb5a29f621da3bc48e6bb",
+   "made_with": [
+    "-c",
+    "g4"
+   ],
+   "tags": "II, 1728x260, BitsPerSample 1, SamplesPerPixel 1, Compression 4, PhotometricInterpretation 0, PlanarConfiguration 1, RowsPerStrip 37 (8 strips)"
+  },
+  "g4_small": {
+   "category": "g4",
+   "width": 37,
+   "height": 23,
+   "channels": 1,
+   "sha256": "78bf4917116f70d696c004b2b19ab9f6ee2843e1ce0d90ccbca66428ec2138c0",
+   "bytes": 412,
+   "tiff_sha256": "219e9aefe5798b58fc0f4b9eb8389098272a422077982c1dfc48904df1c97a6f",
+   "made_with": [
+    "-c",
+    "g4"
+   ],
+   "tags": "II, 37x23, BitsPerSample 1, SamplesPerPixel 1, Compression 4, PhotometricInterpretation 0, PlanarConfiguration 1, RowsPerStrip 23 (1 strips)"
+  },
+  "g4_wide": {
+   "category": "g4",
+   "width": 3000,
+   "height": 48,
+   "channels": 1,
+   "sha256": "95b2da08f28f58f1973cf75f53366cb0b92c132cc474608b5b3d0ec564d232b5",
+   "bytes": 2490,
+   "tiff_sha256": "3e8eb503cc0c10c0ebe62f92274b4d8a634e828fa143ad896018dd0d76812b3a",
+   "made_with": [
+    "-c",
+    "g4"
+   ],
+   "tags": "II, 3000x48, BitsPerSample 1, SamplesPerPixel 1, Compression 4, PhotometricInterpretation 0, PlanarConfiguration 1, RowsPerStrip 21 (3 strips)"
+  },
+  "g4_strips_doc": {
+   "category": "g4",
+   "width": 1728,
+   "height": 260,
+   "channels": 1,
+   "sha256": "d4dc4ea2f96d0ea3409985a475b05dc7e841f6cd56dd66b75bb298a6db15075d",
+   "bytes": 21752,
+   "tiff_sha256": "c1de4f18aba4ebd0bbf988d935c01973ca62a6e0b20dfcc2f0900a2f5aa87f9e",
+   "made_with": [
+    "-c",
+    "g4",
+    "-r",
+    "32"
+   ],
+   "tags": "II, 1728x260, BitsPerSample 1, SamplesPerPixel 1, Compression 4, PhotometricInterpretation 0, PlanarConfiguration 1, RowsPerStrip 32 (9 strips)"
+  },
+  "g4_lsb2msb_doc": {
+   "category": "g4",
+   "width": 1728,
+   "height": 260,
+   "channels": 1,
+   "sha256": "d4dc4ea2f96d0ea3409985a475b05dc7e841f6cd56dd66b75bb298a6db15075d",
+   "bytes": 21754,
+   "tiff_sha256": "5e685ecff4e5f58fe04c9fc17ca51e78394bc51baf699ec6cf16b72ece309ed1",
+   "made_with": [
+    "-c",
+    "g4",
+    "-f",
+    "lsb2msb"
+   ],
+   "tags": "II, 1728x260, BitsPerSample 1, SamplesPerPixel 1, Compression 4, PhotometricInterpretation 0, PlanarConfiguration 1, RowsPerStrip 37 (8 strips), FillOrder 2"
+  },
+  "g4_minisblack_doc": {
+   "category": "g4",
+   "width": 1728,
+   "height": 260,
+   "channels": 1,
+   "sha256": "d4dc4ea2f96d0ea3409985a475b05dc7e841f6cd56dd66b75bb298a6db15075d",
+   "bytes": 21854,
+   "tiff_sha256": "eae03db5a1bd01b40962a04834eb157592b6f9bb6225bb9621c01e09962eba52",
+   "made_with": [
+    "-c",
+    "g4"
+   ],
+   "tags": "II, 1728x260, BitsPerSample 1, SamplesPerPixel 1, Compression 4, PhotometricInterpretation 1, PlanarConfiguration 1, RowsPerStrip 37 (8 strips)"
+  },
+  "g4_tiled_doc": {
+   "category": "g4",
+   "width": 1728,
+   "height": 260,
+   "channels": 1,
+   "sha256": "d4dc4ea2f96d0ea3409985a475b05dc7e841f6cd56dd66b75bb298a6db15075d",
+   "bytes": 45578,
+   "tiff_sha256": "a70eebe4327fe59cf8413ddbb042ba088d913be9fe7a77517055d7ef43a0ae2e",
+   "made_with": [
+    "-c",
+    "g4",
+    "-t",
+    "-w",
+    "256",
+    "-l",
+    "256"
+   ],
+   "tags": "II, 1728x260, BitsPerSample 1, SamplesPerPixel 1, Compression 4, PhotometricInterpretation 0, PlanarConfiguration 1, tiles 256x256 (14 of them)"
+  }
+ }
+}
