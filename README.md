@@ -1,5 +1,7 @@
 # The Fax Test
 
+![An illustration: an unbranded 1980s fax machine prints a page that starts as a clean document and turns into black bands with white streaks](images/fax-test.jpg)
+
 Can a language model write a complete TIFF decoder, fax compression included, in one answer? The Fax Test asks a
 model once, through any OpenAI-compatible API, runs the code it writes on 40 TIFF files in a sandbox, and counts a
 file only if every pixel is right.
@@ -175,6 +177,7 @@ connection check uses a listener on your own machine.
 
 ## Status and licence
 
-An example to adapt, not a maintained product. The Docker sandbox has not yet been run by us end to end (the
+An example to adapt, not a maintained product. The picture at the top is an illustration, made with an image
+model. The Docker sandbox has not yet been run by us end to end (the
 machine it was written on had no room for Docker's image); the macOS sandbox and the whole test have. MIT licence, see [LICENSE](LICENSE). Copyright (c) 2026 Jacek
 Garbuliński Blixild, [blixild.com](https://blixild.com).
