@@ -186,6 +186,14 @@ Deflate. At 60,000 tokens most answers from the reasoning models ended while sti
 what had failed, Qwen3.8-27B with reasoning off went from 1 file to 8 in one turn and stayed there in one run, and from
 7 to 9 in another; with reasoning, its module got worse each turn (6, 5, 1).
 
+![The illustration at the top of this page saved as TIFF in six compressions and read by libtiff and by the three best decoders, all written by Qwen3.8-27B: Deflate exact from all three; PackBits exact from two and sheared by the third; uncompressed exact from one, a crash for two; LZW almost all black; both fax versions almost all black or a crash](images/fax-machine-gallery.jpg)
+
+The illustration at the top of this page, saved as TIFF in six compressions, went through libtiff and through the
+three best decoders, all written by Qwen3.8-27B. The color versions use Deflate, PackBits, no compression and LZW; the
+black-and-white ones use the Group 3 and Group 4 fax codes. Deflate comes back exact from all three decoders, while
+the fax versions and LZW come back almost all black or not at all. `tools/gallery.py --tiff` drew the figure, with
+the decoders in the sandbox.
+
 ## What it does not test
 
 One format, in Python, and the first image of each file. It leaves out JPEG inside TIFF, multi-page files, BigTIFF,
