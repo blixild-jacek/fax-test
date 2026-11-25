@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 # Copyright (c) 2026 Jacek Garbuliński Blixild, blixild.com
 # SPDX-License-Identifier: MIT
-"""Draws what decoders returned beside the originals: one row per test file, the original first, then one column per
-module, each tile marked exact, the share of pixels right, the wrong size, or the error. The modules run in the same
-sandbox as the grader. Needs Pillow (the test itself does not).
+"""Draws what decoders returned beside the originals: one row per TIFF file, the original first, then one column per
+module, each picture marked exact, the share of pixels right, a short output, or the crash. The modules run in the
+same sandbox as the grader. Needs Pillow (the test itself does not).
 
-  python3 tools/gallery.py results/RUN.json [more.json or module.py ...] [--label NAME ...] [--files a,b,c]
-                           [--tiff FILE ...] [--tile WxH] [--out F]
+  python3 tools/gallery.py results/RUN.json [more.json or module.py ...] [--label "NAME|note" ...]
+                           [--files a,b,c | --tiff FILE ... [--name "NAME|note" ...]]
+                           [--tile WxH] [--title T] [--subtitle S] [--note N] [--out F]
 
-A results file contributes its best turn's module; --label names the columns in order; --files picks the rows
-(default: a mix of the uncompressed, LZW and fax-coded files); --tiff draws your own TIFF files instead, each
-original as libtiff reads it through Pillow; --tile sets each picture's box (default 360x120).
+A results file contributes its best turn's module. --label names the columns in order, --name the rows; a "|"
+starts the smaller second line. --files picks test files for the rows (default: a mix of the uncompressed, LZW and
+fax-coded ones); --tiff draws your own TIFF files instead, each original as libtiff reads it through Pillow.
 """
 import argparse
 import json
@@ -26,10 +27,26 @@ from PIL import Image, ImageDraw, ImageFont  # noqa: E402
 
 DEFAULT_FILES = ('raw_rgb8', 'raw_pal4', 'raw_rgb8_planar', 'raw_gray8_tiled', 'lzw_rgb8', 'lzw_bilevel',
                  'ccitt_rle_doc', 'g3_1d_doc', 'g3_2d_doc', 'g4_doc')
-PAD, CAPTION, HEAD, ROW_LABEL = 14, 22, 54, 190
-COMPRESSION = {1: 'uncompressed', 2: 'ccitt rle', 3: 'ccitt group 3', 4: 'ccitt group 4', 5: 'lzw', 8: 'deflate',
-               32946: 'deflate', 32773: 'packbits'}
-INK, MUTED, PAPER, LINE = (24, 24, 24), (110, 110, 110), (246, 245, 241), (170, 170, 170)
+COMPRESSION = {1: 'uncompressed', 2: 'CCITT RLE', 3: 'CCITT Group 3', 4: 'CCITT Group 4', 5: 'LZW', 8: 'Deflate',
+               32946: 'Deflate', 32773: 'PackBits'}
+PAPER, TILE, EMPTY, LINE = (247, 245, 240), (255, 255, 255), (236, 233, 226), (217, 213, 204)
+INK, MUTED, GOOD = (29, 29, 27), (110, 108, 102), (37, 120, 56)   # green only for exact: every pixel right
+FONTS = [('/System/Library/Fonts/HelveticaNeue.ttc', 0, 1),                      # macOS
+         ('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 0, 0),             # Linux
+         ('C:\\Windows\\Fonts\\arial.ttf', 0, 0)]                                 # Windows
+BOLD_FILES = {'/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf': '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
+              'C:\\Windows\\Fonts\\arial.ttf': 'C:\\Windows\\Fonts\\arialbd.ttf'}
+
+
+def font(size, bold=False):
+    for path, regular, bold_index in FONTS:
+        try:
+            if bold and path in BOLD_FILES:
+                return ImageFont.truetype(BOLD_FILES[path], size)
+            return ImageFont.truetype(path, size, index=bold_index if bold else regular)
+        except OSError:
+            continue
+    return ImageFont.load_default(size=size)
 
 
 def best_module(path):
@@ -41,7 +58,7 @@ def best_module(path):
     if not turns:
         raise SystemExit(f'{path}: no graded module in it')
     best = max(turns, key=lambda t: t['grade']['summary']['passed'])
-    return best['code'], f"{rec['model']}, {best['grade']['summary']['passed']}/40"
+    return best['code'], f"{rec['model']}|{best['grade']['summary']['passed']} of 40 test files right"
 
 
 def view(px, w, h, c):
@@ -55,53 +72,117 @@ def fit(im, tile_w, tile_h):
     """A page wider than the tile's shape cropped from the left to it, then scaled into the tile."""
     if im.width * tile_h > tile_w * im.height:
         im = im.crop((0, 0, round(tile_w * im.height / tile_h), im.height))
+    grow = min(tile_w // im.width, tile_h // im.height)
+    if grow > 1:                              # a small picture: whole-number steps, every pixel a sharp square
+        return im.resize((im.width * grow, im.height * grow), Image.NEAREST)
     im = im.copy()
-    im.thumbnail((tile_w, tile_h), Image.NEAREST if im.width < tile_w else Image.LANCZOS)
+    im.thumbnail((tile_w, tile_h), Image.LANCZOS)
     return im
 
 
 def rows_from(a, manifest):
-    """(name, note, TIFF path, expected pixels, width, height, channels) for each row."""
+    """(label, TIFF path, expected pixels, width, height, channels) for each row."""
+    out = []
     if a.tiff:
-        out = []
         for path in a.tiff:
             im = Image.open(path)
             comp = COMPRESSION.get(im.tag_v2.get(259), f'compression {im.tag_v2.get(259)}')
+            kind = 'black and white' if im.mode in ('1', 'L') else 'color'
             im = im.convert('L' if im.mode in ('1', 'L') else 'RGB')
-            out.append((os.path.splitext(os.path.basename(path))[0], comp, path, im.tobytes(), im.width, im.height,
-                        1 if im.mode == 'L' else 3))
-        return out
-    files = a.files.split(',') if a.files else list(DEFAULT_FILES)
-    return [(n, manifest[n]['category'].replace('_', ' '), os.path.join(faxtest.CORPUS, n + '.tif'),
-             zlib.decompress(open(os.path.join(faxtest.CORPUS, n + '.expected.z'), 'rb').read()),
-             manifest[n]['width'], manifest[n]['height'], manifest[n]['channels']) for n in files]
+            out.append((f'{comp}|{kind}', path, im.tobytes(), im.width, im.height, 1 if im.mode == 'L' else 3))
+    else:
+        for n in (a.files.split(',') if a.files else DEFAULT_FILES):
+            m = manifest[n]
+            exp = zlib.decompress(open(os.path.join(faxtest.CORPUS, n + '.expected.z'), 'rb').read())
+            out.append((f"{n}|{m['category'].replace('_', ' ')}", os.path.join(faxtest.CORPUS, n + '.tif'), exp,
+                        m['width'], m['height'], m['channels']))
+    for i, name in enumerate(a.name or []):
+        if i < len(out):
+            out[i] = (name,) + out[i][1:]
+    return out
+
+
+def outcome(path, tif, exp, w, h, c, sandbox):
+    """(picture or None, caption, kind) for one decoder on one file; kind exact | partial | crash."""
+    try:
+        head, px = faxtest.run_one(path, tif, sandbox=sandbox)
+    except RuntimeError as e:
+        return None, str(e), 'crash'
+    got = (head['width'], head['height'], head['channels'])
+    if px == exp:
+        return view(px, w, h, c), 'Exact: every pixel right', 'exact'
+    if got == (w, h, c) and len(px) == len(exp):
+        right = sum(px[k:k + c] == exp[k:k + c] for k in range(0, len(exp), c)) / (len(exp) // c)
+        for value, shade in ((0, 'black'), (255, 'white')):   # one shade nearly everywhere: matches are chance
+            share = px.count(value) / len(px)
+            if share >= 0.95:
+                note = 'match by chance' if share == 1 else 'match'
+                return view(px, w, h, c), \
+                    f"{'All' if share == 1 else 'Almost all'} {shade} ({right:.0%} of pixels {note})", 'partial'
+        return view(px, w, h, c), f'{right:.0%} of pixels right', 'partial'
+    if got == (w, h, c) and px:
+        return view((px + b'\x80' * len(exp))[:len(exp)], w, h, c), \
+            f'Short output: {len(px):,} of {len(exp):,} bytes', 'partial'
+    im = view(px, *got)
+    return im, f'Wrong size: {got[0]} x {got[1]}, {got[2]} channel{"s" if got[2] != 1 else ""}', 'partial'
+
+
+def wrap(text, fnt, width):
+    """Lines of text that each fit width pixels in fnt."""
+    lines, cur = [], ''
+    for word in text.split():
+        trial = f'{cur} {word}'.strip()
+        if cur and fnt.getlength(trial) > width:
+            lines.append(cur)
+            cur = word
+        else:
+            cur = trial
+    return lines + ([cur] if cur else [])
+
+
+def two_lines(d, x, y, text, big, small, color=INK):
+    first, _, second = text.partition('|')
+    d.text((x, y), first, fill=color, font=big)
+    if second:
+        d.text((x, y + big.size + 6), second, fill=MUTED, font=small)
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('inputs', nargs='+', help='results .json files or module .py files')
-    ap.add_argument('--label', action='append', help='column names, in order')
-    ap.add_argument('--files', help='comma-separated corpus file names for the rows')
+    ap.add_argument('--label', action='append', help='a column name, "NAME|note" (repeat, in order)')
+    ap.add_argument('--files', help='comma-separated test file names for the rows')
     ap.add_argument('--tiff', action='append', help='a TIFF file of your own for a row (repeat for more)')
-    ap.add_argument('--tile', default='360x120', help='each picture\'s box, WIDTHxHEIGHT in pixels')
+    ap.add_argument('--name', action='append', help='a row name, "NAME|note" (repeat, in order)')
+    ap.add_argument('--tile', default='360x240', help='each picture\'s box, WIDTHxHEIGHT in pixels')
+    ap.add_argument('--title', default='The Fax Test')
+    ap.add_argument('--subtitle', default='The original as libtiff decodes it, then what each model-written decoder '
+                    'returned for the same file')
+    ap.add_argument('--note', default='github.com/blixild-jacek/fax-test')
     ap.add_argument('--out', default=os.path.join(HERE, 'results', 'gallery.png'))
     ap.add_argument('--sandbox', default='auto', choices=('auto', 'sandbox-exec', 'docker', 'none'))
     a = ap.parse_args()
     sandbox = faxtest.pick_sandbox(a.sandbox)
     manifest = json.load(open(os.path.join(faxtest.CORPUS, 'manifest.json'), encoding='utf-8'))['files']
     rows = rows_from(a, manifest)
-    TILE_W, TILE_H = (int(v) for v in a.tile.lower().split('x'))
+    tw, th = (int(v) for v in a.tile.lower().split('x'))
     modules = [best_module(p) for p in a.inputs]
     labels = (a.label or []) + [m[1] for m in modules[len(a.label or []):]]
-    font = ImageFont.load_default(size=17)
-    small = ImageFont.load_default(size=14)
-    cols = 1 + len(modules)
-    W = ROW_LABEL + cols * (TILE_W + PAD) + PAD
-    H = HEAD + len(rows) * (TILE_H + CAPTION + PAD) + PAD
+    f_title, f_sub = font(44, True), font(21)
+    f_head, f_note, f_cap = font(21, True), font(16), font(16)
+    f_cap_bold, f_crash = font(16, True), font(17, True)
+    M, GAP, LEFT, CAP = 48, 22, 230, 40                       # margin, gap between pictures, row names, caption
+    top = M + 44 + 14 + 21 + 40                               # title, subtitle, space
+    head_h = 21 + 6 + 16 + 18
+    W = M + LEFT + len(labels + [0]) * (tw + GAP) - GAP + M
+    H = top + head_h + len(rows) * (th + CAP + GAP) + 50 + M
     canvas = Image.new('RGB', (W, H), PAPER)
     d = ImageDraw.Draw(canvas)
-    for j, text in enumerate(['original (libtiff)'] + labels):
-        d.text((ROW_LABEL + j * (TILE_W + PAD), PAD + 8), text, fill=INK, font=font)
+    d.text((M, M), a.title, fill=INK, font=f_title)
+    d.text((M, M + 44 + 14), a.subtitle, fill=MUTED, font=f_sub)
+    cols = ['Original|as libtiff decodes it'] + labels
+    for j, text in enumerate(cols):
+        two_lines(d, M + LEFT + j * (tw + GAP), top, text, f_head, f_note)
     tmp = []
     try:
         paths = []
@@ -111,49 +192,35 @@ def main():
             f.close()
             tmp.append(f.name)
             paths.append(f.name)
-        for i, (name, note0, tif, exp, w0, h0, c0) in enumerate(rows):
-            meta = {'width': w0, 'height': h0, 'channels': c0}
-            y = HEAD + i * (TILE_H + CAPTION + PAD)
-            d.text((PAD, y + 4), name, fill=INK, font=font)
-            d.text((PAD, y + 26), note0, fill=MUTED, font=small)
-            tiles = [(view(exp, w0, h0, c0), f'{w0} x {h0}')]
-            for path in paths:
-                try:
-                    head, px = faxtest.run_one(path, tif, sandbox=sandbox)
-                except RuntimeError as e:
-                    tiles.append((None, 'error: ' + str(e)[:46]))
-                    continue
-                im = view(px, head['width'], head['height'], head['channels'])
-                dims = (head['width'], head['height'], head['channels'])
-                want = (meta['width'], meta['height'], meta['channels'])
-                if im is None and dims == want and px:     # the right size, too few or too many bytes: draw what came
-                    n = len(exp)
-                    im = view((px + b'\x80' * n)[:n], *want)
-                    tiles.append((im, f'{len(px):,} of {n:,} bytes returned'))
-                    continue
-                if px == exp:
-                    note = 'exact'
-                elif im is not None and (head['width'], head['height'], head['channels']) == \
-                        (meta['width'], meta['height'], meta['channels']):
-                    c = meta['channels']
-                    right = sum(px[k:k + c] == exp[k:k + c] for k in range(0, len(exp), c)) / (len(exp) // c)
-                    note = f'{right:.0%} of pixels right'
-                else:
-                    note = f"wrong size: {head['width']} x {head['height']} x {head['channels']}"
-                tiles.append((im, note))
-            for j, (im, note) in enumerate(tiles):
-                x = ROW_LABEL + j * (TILE_W + PAD)
-                d.rectangle((x - 1, y - 1, x + TILE_W, y + TILE_H), outline=LINE, fill=(232, 231, 227))
+        for i, (name, tif, exp, w0, h0, c0) in enumerate(rows):
+            y = top + head_h + i * (th + CAP + GAP)
+            if i:
+                d.line((M, y - GAP // 2, W - M, y - GAP // 2), fill=LINE, width=1)
+            two_lines(d, M, y + 6, name, f_head, f_note)
+            tiles = [(view(exp, w0, h0, c0), f'{w0} x {h0} pixels', 'original')]
+            tiles += [outcome(p, tif, exp, w0, h0, c0, sandbox) for p in paths]
+            for j, (im, caption, kind) in enumerate(tiles):
+                x = M + LEFT + j * (tw + GAP)
+                d.rectangle((x, y, x + tw - 1, y + th - 1), fill=EMPTY if im is None else TILE, outline=LINE)
                 if im is not None:
-                    im = fit(im, TILE_W, TILE_H)
-                    canvas.paste(im, (x + (TILE_W - im.width) // 2, y + (TILE_H - im.height) // 2))
-                d.text((x, y + TILE_H + 3), note, fill=INK if note == 'exact' or j == 0 else MUTED, font=small)
+                    im = fit(im, tw - 2, th - 2)
+                    canvas.paste(im, (x + (tw - im.width) // 2, y + (th - im.height) // 2))
+                    d.text((x, y + th + 8), caption, fill=GOOD if kind == 'exact' else (MUTED if kind == 'original'
+                                                                                       else INK),
+                           font=f_cap_bold if kind == 'exact' else f_cap)
+                else:                                          # a crash: its message inside the box
+                    d.text((x + 18, y + th // 2 - 34), 'Crashed', fill=INK, font=f_crash)
+                    msg = wrap(caption, f_cap, tw - 36)[:3]
+                    for k, line in enumerate(msg):
+                        d.text((x + 18, y + th // 2 - 8 + k * 21), line, fill=MUTED, font=f_cap)
+                    d.text((x, y + th + 8), 'No picture returned', fill=INK, font=f_cap)
     finally:
         for p in tmp:
             os.unlink(p)
+    d.text((M, H - M - 18), a.note, fill=MUTED, font=f_note)
     os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
     canvas.save(a.out, optimize=True)
-    print(f'{a.out}: {len(rows)} files x {len(modules)} decoders')
+    print(f'{a.out}: {len(rows)} files x {len(modules)} decoders, {W} x {H} pixels')
 
 
 if __name__ == '__main__':
